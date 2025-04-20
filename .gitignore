@@ -10,3 +10,6 @@ CTestTestfile.cmake
 build
 build-*
 CMakeLists.user*
+*.pyc
+.vscode
+CMakeLists.txt.user*
