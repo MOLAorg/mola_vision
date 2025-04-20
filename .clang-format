@@ -16,6 +16,6 @@ DerivePointerAlignment: false
 ReflowComments:  true # Should be true, otherwise clang-format doesn't touch comments
 SortIncludes:    true
 SpaceBeforeAssignmentOperators: true
-Standard:        Cpp17
+Standard:        Cpp11
 TabWidth:        2
 UseTab:          Never # Available options are Never, Always, ForIndentation
