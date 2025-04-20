@@ -1,14 +1,11 @@
-# mola-foo
-Write me!
+[![CI Check clang-format](https://github.com/MOLAorg/mola_vision/actions/workflows/check-clang-format.yml/badge.svg)](https://github.com/MOLAorg/mola_vision/actions/workflows/check-clang-format.yml)
+[![CI ROS](https://github.com/MOLAorg/mola_vision/actions/workflows/build-ros.yml/badge.svg)](https://github.com/MOLAorg/mola_vision/actions/workflows/build-ros.yml)
+[![Docs](https://img.shields.io/badge/docs-latest-brightgreen.svg)](https://docs.mola-slam.org/latest/)
 
-Provided MOLA modules:
-* `Foo`, type Foo.
+# mola_vision
+Repository for (classic) computer vision-related C++ libraries and MOLA modules.
 
-## Build and install
-Refer to the [root MOLA repository](https://github.com/MOLAorg/mola).
-
-## Docs and examples
-See this package page [in the documentation](https://docs.mola-slam.org/latest/modules.html).
+Refer to the [official documentation](https://docs.mola-slam.org/latest/) for build instructions, demos, API reference, etc.
 
 ## License
 This package is released under the GNU GPL v3 license.
