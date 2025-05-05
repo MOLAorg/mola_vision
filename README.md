@@ -8,4 +8,4 @@ Repository for (classic) computer vision-related C++ libraries and MOLA modules.
 Refer to the [official documentation](https://docs.mola-slam.org/latest/) for build instructions, demos, API reference, etc.
 
 ## License
-This package is released under the GNU GPL v3 license.
+This package is released under the BSD 3-Clause License.

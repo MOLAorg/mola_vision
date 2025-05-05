@@ -4,7 +4,7 @@
 #
 # Copyright (C) 2018-2025, Jose Luis Blanco-Claraco, contributors (AUTHORS.md)
 # All rights reserved.
-# Released under GNU GPL v3. See LICENSE file
+# Released under BSD 3-clause license. See LICENSE file
 # ------------------------------------------------------------------------------
 
 # Minimum CMake vesion: limited by CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS
