@@ -90,39 +90,31 @@ void VisualInertialOdometry::onNewObservation(const CObservation::Ptr& o)
     }
 
     // Yes, it's an IMU obs:
-    auto fut = worker_.enqueue(&LidarOdometry::onIMU, this, o);
+    auto fut = worker_.enqueue(&VisualInertialOdometry::onIMU, this, o);
     (void)fut;
   }
 
-  // Is it GNSS?
-  if (params_.gnss_sensor_label &&
-      std::regex_match(o->sensorLabel, params_.gnss_sensor_label.value()))
+  // Is it a camera obs?
+  for (const auto& re : params_.camera_sensor_labels)
   {
+    if (!std::regex_match(o->sensorLabel, re))
     {
-      auto lck = mrpt::lockHelper(is_busy_mtx_);
-      state_.worker_tasks_others++;
+      continue;
     }
-    auto fut = worker_.enqueue(&LidarOdometry::onGPS, this, o);
-    (void)fut;
-  }
 
-  // Is it a LIDAR obs?
-  for (const auto& re : params_.lidar_sensor_labels)
-  {
-    if (!std::regex_match(o->sensorLabel, re)) continue;
-
-    // Yes, it's a LIDAR obs:
+    // Yes, it's a camera obs:
     const int queued = [this]()
     {
       auto lck = mrpt::lockHelper(is_busy_mtx_);
-      return state_.worker_tasks_lidar;
+      return state_.worker_tasks_camera;
     }();
 
-    profiler_.registerUserMeasure("onNewObservation.lidar_queue_length", queued);
-    if (queued > params_.max_lidar_queue_before_drop)
+    profiler_.registerUserMeasure("onNewObservation.camera_queue_length", queued);
+    if (queued > params_.max_camera_queue_before_drop)
     {
       MRPT_LOG_THROTTLE_WARN_FMT(
-          1.0, "Dropping observation due to LiDAR worker thread too busy (dropped frames: %.02f%%)",
+          1.0,
+          "Dropping observation due to camera worker thread too busy (dropped frames: %.02f%%)",
           getDropStats() * 100.0);
       profiler_.registerUserMeasure("onNewObservation.drop_observation", 1);
       addDropStats(true);
@@ -133,11 +125,11 @@ void VisualInertialOdometry::onNewObservation(const CObservation::Ptr& o)
 
     {
       auto lck = mrpt::lockHelper(is_busy_mtx_);
-      state_.worker_tasks_lidar++;
+      state_.worker_tasks_camera++;
     }
 
     // Enqueue task:
-    auto fut = worker_.enqueue(&LidarOdometry::onLidar, this, o);
+    auto fut = worker_.enqueue(&VisualInertialOdometry::onImage, this, o);
 
     (void)fut;
 
@@ -147,7 +139,7 @@ void VisualInertialOdometry::onNewObservation(const CObservation::Ptr& o)
   MRPT_TRY_END
 }
 
-void VisualInertialOdometry::onLidar(const CObservation::Ptr& o)
+void VisualInertialOdometry::onImage(const CObservation::Ptr& o)
 {
   const bool abort_running = [this]()
   {
@@ -161,7 +153,7 @@ void VisualInertialOdometry::onLidar(const CObservation::Ptr& o)
   {
     try
     {
-      processLidarScan(o);
+      processImage(o);
     }
     catch (const std::exception& e)
     {
@@ -173,7 +165,7 @@ void VisualInertialOdometry::onLidar(const CObservation::Ptr& o)
 
   {
     auto lck = mrpt::lockHelper(is_busy_mtx_);
-    state_.worker_tasks_lidar--;
+    state_.worker_tasks_camera--;
   }
 }
 
@@ -214,21 +206,6 @@ void VisualInertialOdometry::onIMUImpl(const CObservation::Ptr& o)
   MRPT_LOG_DEBUG_STREAM(
       "onIMU called for timestamp=" << mrpt::system::dateTimeLocalToString(imu->timestamp));
 
-  // Was: state_.navstate_fuse->fuse_imu(*imu);
-  // But since March-2025, state estimators actively subscribe to sensor inputs and it is not
-  // our responsibility to forward IMU to them.
-
-  // Uses of IMU in MOLA-LO (this class):
-  // 1) During special initialization to compensate for pitch/roll;
-  // 2) (TODO!) Improved scan de-skewing.
-
-  // 1) Initial pitch/roll estimation:
-  const bool do_initial_pitch_roll_estimate = true;
-
-  if (!do_initial_pitch_roll_estimate)
-  {
-    return;
-  }
   if (!imu->has(mrpt::obs::IMU_X_ACC) || !imu->has(mrpt::obs::IMU_Y_ACC) ||
       !imu->has(mrpt::obs::IMU_Z_ACC))
   {
@@ -245,75 +222,6 @@ void VisualInertialOdometry::onIMUImpl(const CObservation::Ptr& o)
   const auto accel_base_link = accel_sensor.rotated(imu->sensorPose.asTPose());
 
   MRPT_TODO("Continue");
-}
-
-void VisualInertialOdometry::onGPS(const CObservation::Ptr& o)
-{
-  // All methods that are enqueued into a thread pool should have its own
-  // top-level try-catch:
-  try
-  {
-    onGPSImpl(o);
-  }
-  catch (const std::exception& e)
-  {
-    MRPT_LOG_ERROR_STREAM("Exception:\n" << mrpt::exception_to_str(e));
-    auto lckStateFlags = mrpt::lockHelper(state_flags_mtx_);
-    state_.fatal_error = true;
-  }
-
-  {
-    auto lck = mrpt::lockHelper(is_busy_mtx_);
-    state_.worker_tasks_others--;
-  }
-}
-
-void VisualInertialOdometry::onGPSImpl(const CObservation::Ptr& o)
-{
-  ASSERT_(o);
-
-  const ProfilerEntry tleg(profiler_, "onGPS");
-
-  auto gps = std::dynamic_pointer_cast<mrpt::obs::CObservationGPS>(o);
-  ASSERTMSG_(
-      gps, mrpt::format(
-               "GPS observation with label '%s' does not have the expected "
-               "type 'mrpt::obs::CObservationGPS', it is '%s' instead",
-               o->sensorLabel.c_str(), o->GetRuntimeClass()->className));
-
-  MRPT_LOG_DEBUG_FMT("GNSS observation received, t=%.03f", mrpt::Clock::toDouble(gps->timestamp));
-
-  // Keep the latest GPS observations for simplemap insertion:
-  state_.last_gnss_.emplace(gps->timestamp, gps);
-
-  // remove old ones:
-  while (state_.last_gnss_.size() > params_.gnss_queue_max_size)
-  {
-    state_.last_gnss_.erase(state_.last_gnss_.begin());
-  }
-}
-
-bool VisualInertialOdometry::doCheckIsValidObservation(const mp2p_icp::metric_map_t& m)
-{
-  if (!params_.observation_validity_checks.enabled) return true;  // it's valid
-
-  auto it = m.layers.find(params_.observation_validity_checks.check_layer_name);
-  ASSERTMSG_(
-      it != m.layers.end(),
-      mrpt::format(
-          "Observation validity check expected observation layer '%s' but did not exist",
-          params_.observation_validity_checks.check_layer_name.c_str()));
-
-  auto pts = std::dynamic_pointer_cast<mrpt::maps::CPointsMap>(it->second);
-  ASSERTMSG_(
-      pts, mrpt::format(
-               "Observation validity check expected observation layer '%s' of type CPointsMap",
-               params_.observation_validity_checks.check_layer_name.c_str()));
-
-  const bool valid = pts->size() > params_.observation_validity_checks.minimum_point_count;
-
-  MRPT_LOG_DEBUG_STREAM("Observation validity check: layer size=" << pts->size());
-  return valid;
 }
 
 }  // namespace mola

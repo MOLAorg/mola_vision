@@ -29,38 +29,24 @@
 // -----------------------------------------------------------------------------
 
 // This module:
-#include <mola_lidar_odometry/LidarOdometry.h>
+#include <mola_basalt_vio/VisualInertialOdometry.h>
 
 // MOLA:
 #include <mola_yaml/yaml_helpers.h>
 
-// MRPT:
-#include <mrpt/gui/CDisplayWindowGUI.h>  // for nanogui controls
-
 namespace mola
 {
 
-void LidarOdometry::Parameters::AdaptiveThreshold::initialize(const Yaml& cfg)
-{
-  YAML_LOAD_REQ(enabled, bool);
-  YAML_LOAD_REQ(initial_sigma, double);
-  YAML_LOAD_REQ(min_motion, double);
-  YAML_LOAD_REQ(kp, double);
-  YAML_LOAD_REQ(alpha, double);
-  YAML_LOAD_OPT(maximum_sigma, double);
-}
-
-void LidarOdometry::Parameters::Visualization::initialize(const Yaml& cfg)
+void VisualInertialOdometry::Parameters::Visualization::initialize(const Yaml& cfg)
 {
   YAML_LOAD_OPT(map_update_decimation, int);
   YAML_LOAD_OPT(show_trajectory, bool);
-  YAML_LOAD_OPT(show_current_observation, bool);
+  // YAML_LOAD_OPT(show_current_observation, bool);
   YAML_LOAD_OPT(show_ground_grid, bool);
   YAML_LOAD_OPT(ground_grid_spacing, float);
   YAML_LOAD_OPT(show_console_messages, bool);
   YAML_LOAD_OPT(current_pose_corner_size, double);
   YAML_LOAD_OPT(local_map_point_size, float);
-  YAML_LOAD_OPT(local_map_render_voxelmap_free_space, bool);
 
   if (cfg.has("model"))
   {
@@ -80,17 +66,34 @@ void LidarOdometry::Parameters::Visualization::initialize(const Yaml& cfg)
         continue;
       }
 
-      if (c.count("tf.x")) m.tf.x = c["tf.x"].as<float>();
-      if (c.count("tf.y")) m.tf.y = c["tf.y"].as<float>();
-      if (c.count("tf.z")) m.tf.z = c["tf.z"].as<float>();
-
-      if (c.count("tf.yaw")) m.tf.yaw = mrpt::DEG2RAD(c["tf.yaw"].as<float>());
-
-      if (c.count("tf.pitch")) m.tf.pitch = mrpt::DEG2RAD(c["tf.pitch"].as<float>());
-
-      if (c.count("tf.roll")) m.tf.roll = mrpt::DEG2RAD(c["tf.roll"].as<float>());
-
-      if (c.count("scale")) m.scale = c["scale"].as<float>();
+      if (c.count("tf.x"))
+      {
+        m.tf.x = c["tf.x"].as<float>();
+      }
+      if (c.count("tf.y"))
+      {
+        m.tf.y = c["tf.y"].as<float>();
+      }
+      if (c.count("tf.z"))
+      {
+        m.tf.z = c["tf.z"].as<float>();
+      }
+      if (c.count("tf.yaw"))
+      {
+        m.tf.yaw = mrpt::DEG2RAD(c["tf.yaw"].as<float>());
+      }
+      if (c.count("tf.pitch"))
+      {
+        m.tf.pitch = mrpt::DEG2RAD(c["tf.pitch"].as<float>());
+      }
+      if (c.count("tf.roll"))
+      {
+        m.tf.roll = mrpt::DEG2RAD(c["tf.roll"].as<float>());
+      }
+      if (c.count("scale"))
+      {
+        m.scale = c["scale"].as<float>();
+      }
     }
   }
 
@@ -99,78 +102,18 @@ void LidarOdometry::Parameters::Visualization::initialize(const Yaml& cfg)
   YAML_LOAD_OPT(camera_rotates_with_vehicle, bool);
 }
 
-void LidarOdometry::Parameters::SimpleMapOptions::initialize(const Yaml& cfg, Parameters& parent)
-{
-  YAML_LOAD_OPT(generate, bool);
-  DECLARE_PARAMETER_IN_OPT(cfg, min_translation_between_keyframes, parent);
-  DECLARE_PARAMETER_IN_OPT(cfg, min_rotation_between_keyframes, parent);
-  YAML_LOAD_OPT(save_final_map_to_file, std::string);
-  YAML_LOAD_OPT(add_non_keyframes_too, bool);
-  YAML_LOAD_OPT(measure_from_last_kf_only, bool);
-  YAML_LOAD_OPT(generate_lazy_load_scan_files, bool);
-  YAML_LOAD_OPT(save_gnss_max_age, double);
-}
-
-void LidarOdometry::Parameters::MultipleLidarOptions::initialize(
-    const Yaml& cfg, Parameters& parent)
-{
-  DECLARE_PARAMETER_IN_REQ(cfg, max_time_offset, parent);
-  YAML_LOAD_REQ(lidar_count, uint32_t);
-}
-
-void LidarOdometry::Parameters::MapUpdateOptions::initialize(const Yaml& cfg, Parameters& parent)
-{
-  YAML_LOAD_OPT(enabled, bool);
-  DECLARE_PARAMETER_IN_REQ(cfg, min_translation_between_keyframes, parent);
-  DECLARE_PARAMETER_IN_REQ(cfg, min_rotation_between_keyframes, parent);
-  DECLARE_PARAMETER_IN_OPT(cfg, max_distance_to_keep_keyframes, parent);
-  DECLARE_PARAMETER_IN_OPT(cfg, check_for_removal_every_n, parent);
-  DECLARE_PARAMETER_IN_OPT(cfg, publish_map_updates_every_n, parent);
-  YAML_LOAD_OPT(measure_from_last_kf_only, bool);
-  YAML_LOAD_OPT(load_existing_local_map, std::string);
-}
-
-void LidarOdometry::Parameters::TrajectoryOutputOptions::initialize(const Yaml& cfg)
+void VisualInertialOdometry::Parameters::TrajectoryOutputOptions::initialize(const Yaml& cfg)
 {
   YAML_LOAD_OPT(save_to_file, bool);
   YAML_LOAD_OPT(output_file, std::string);
 }
 
-void LidarOdometry::Parameters::TraceOutputOptions::initialize(const Yaml& cfg)
+void VisualInertialOdometry::onParameterUpdate(const mrpt::containers::yaml& names_values)
 {
-  YAML_LOAD_OPT(save_to_file, bool);
-  YAML_LOAD_OPT(output_file, std::string);
-}
-
-void LidarOdometry::Parameters::InitialLocalizationOptions::initialize(const Yaml& cfg)
-{
-  MCP_LOAD_OPT(cfg, method);
-
-  YAML_LOAD_OPT(additional_uncertainty_after_reloc_how_many_timesteps, uint32_t);
-
-  if (cfg.has("fixed_initial_pose"))
+  if (names_values.isNullNode() || names_values.empty())
   {
-    ASSERT_(
-        cfg["fixed_initial_pose"].isSequence() &&
-        cfg["fixed_initial_pose"].asSequence().size() == 6);
-
-    auto&      p   = fixed_initial_pose;
-    const auto seq = cfg["fixed_initial_pose"].asSequenceRange();
-    for (size_t i = 0; i < 6; i++) p[i] = seq.at(i).as<double>();
+    return;
   }
-}
-
-void LidarOdometry::Parameters::ObservationValidityChecks::initialize(const Yaml& cfg)
-{
-  YAML_LOAD_OPT(enabled, bool);
-  YAML_LOAD_OPT(check_layer_name, std::string);
-  YAML_LOAD_OPT(minimum_point_count, uint32_t);
-}
-
-#if MOLA_VERSION_CHECK(1, 4, 0)
-void LidarOdometry::onParameterUpdate(const mrpt::containers::yaml& names_values)
-{
-  if (names_values.isNullNode() || names_values.empty()) return;
 
   ASSERT_(names_values.isMap());
 
@@ -179,12 +122,7 @@ void LidarOdometry::onParameterUpdate(const mrpt::containers::yaml& names_values
   // Load parameters:
   setActive(names_values.getOrDefault("active", isActive()));
 
-  params_.local_map_updates.enabled =
-      names_values.getOrDefault("mapping_enabled", params_.local_map_updates.enabled);
-  params_.simplemap.generate =
-      names_values.getOrDefault("generate_simplemap", params_.simplemap.generate);
-
-  // Special triggering reset "variabe":
+  // Special triggering reset "variable":
   if (names_values.getOrDefault("reset_state", false))
   {
     this->enqueue_request(
@@ -200,27 +138,24 @@ void LidarOdometry::onParameterUpdate(const mrpt::containers::yaml& names_values
       [this]()
       {
         auto lckGuiMtx = mrpt::lockHelper(state_gui_mtx_);
+#if 0
         if (gui_.cbActive)
         {
           gui_.cbActive->setChecked(isActive());
           gui_.cbMapping->setChecked(params_.local_map_updates.enabled);
           gui_.cbSaveSimplemap->setChecked(params_.simplemap.generate);
         }
+#endif
       });
 }
-#endif
 
-void LidarOdometry::onExposeParameters()
+void VisualInertialOdometry::onExposeParameters()
 {
-#if MOLA_VERSION_CHECK(1, 4, 0)
   mrpt::containers::yaml nv = mrpt::containers::yaml::Map();
   nv["active"]              = isActive();
-  nv["mapping_enabled"]     = params_.local_map_updates.enabled;
-  nv["generate_simplemap"]  = params_.simplemap.generate;
   nv["reset_state"]         = false;
 
   this->exposeParameters(nv);
-#endif
 }
 
 }  // namespace mola

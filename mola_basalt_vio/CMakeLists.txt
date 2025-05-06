@@ -69,7 +69,6 @@ install(
 install(
   DIRECTORY
     mola-cli-launchs
-    pipelines
     #ros2-launchs
     #rviz2
   DESTINATION
