@@ -37,6 +37,26 @@
 namespace mola
 {
 
+VisualInertialOdometry::VisualInertialOdometry() {}
+
+VisualInertialOdometry::~VisualInertialOdometry()
+{
+  auto lckState = mrpt::lockHelper(state_mtx_);
+
+  if (state_.opt_flow_ptr)
+  {
+    // Indicate the end of the sequence
+    state_.opt_flow_ptr->input_queue.push(nullptr);
+  }
+  if (state_.vio)
+  {
+    state_.vio->drain_input_queues();
+  }
+
+  // todo: better synchronous ending:
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+}
+
 void VisualInertialOdometry::initialize_frontend(const Yaml& c)
 {
   MRPT_TRY_START
@@ -77,6 +97,8 @@ void VisualInertialOdometry::initialize_frontend(const Yaml& c)
     params_.imu_sensor_label = cfg["imu_sensor_label"].as<std::string>();
   }
 
+  YAML_LOAD_OPT(params_, use_imu, bool);
+
   YAML_LOAD_OPT(params_, start_active, bool);
 
   YAML_LOAD_OPT(params_, publish_reference_frame, std::string);
@@ -94,6 +116,9 @@ void VisualInertialOdometry::initialize_frontend(const Yaml& c)
 
   // system-wide profiler:
   // profiler_.enable(params_.pipeline_profiler_enabled);
+
+  // Basalt VIO initialization:
+  // state_.vio_config.xxx
 
   // end of initialization:
   {
