@@ -66,6 +66,9 @@
 namespace mola
 {
 
+template <std::size_t N, typename T>
+constexpr std::array<T, N> create_array(const T& value);
+
 /** Visual-inertial odometry MOLA wrapper for the Basalt VIO system.
  *
  * Basalt was presented in:
@@ -231,8 +234,6 @@ class VisualInertialOdometry : public mola::FrontEndBase, public mola::Localizat
     basalt::OpticalFlowBase::Ptr               opt_flow_ptr;
     basalt::VioEstimatorBase::Ptr              vio;
 
-    tbb::concurrent_bounded_queue<basalt::PoseVelBiasState<double>::Ptr> out_state_queue;
-
     mrpt::poses::CPose3DPDFGaussian last_vio_pose;  //!< in local map
 
     bool last_vio_was_good = true;
@@ -255,6 +256,13 @@ class VisualInertialOdometry : public mola::FrontEndBase, public mola::Localizat
       local_map_needs_publish    = true;
     }
 
+    static constexpr std::size_t               DROP_STATS_WINDOW_LENGHT = 128;
+    std::array<bool, DROP_STATS_WINDOW_LENGHT> drop_frames_stats_good =
+        create_array<DROP_STATS_WINDOW_LENGHT>(true);
+    std::array<bool, DROP_STATS_WINDOW_LENGHT> drop_frames_stats_dropped =
+        create_array<DROP_STATS_WINDOW_LENGHT>(false);
+    std::size_t drop_frames_stats_next_index = 0;
+
     // Visualization:
     mrpt::opengl::CSetOfObjects::Ptr glVehicleFrame, glPathGrp;
     mrpt::opengl::CSetOfLines::Ptr   glEstimatedPath;
@@ -265,6 +273,8 @@ class VisualInertialOdometry : public mola::FrontEndBase, public mola::Localizat
   /** The worker thread pool with 1 thread for processing incoming IMU or Image observations*/
   mrpt::WorkerThreadsPool worker_{
       1 /*num threads*/, mrpt::WorkerThreadsPool::POLICY_FIFO, "worker_vio"};
+
+  tbb::concurrent_bounded_queue<basalt::PoseVelBiasState<double>::Ptr> out_state_queue_;
 
   MethodState        state_;
   const MethodState& state() const { return state_; }
@@ -326,5 +336,21 @@ class VisualInertialOdometry : public mola::FrontEndBase, public mola::Localizat
 
   void onPublishDiagnostics();
 };
+
+namespace detail
+{
+template <typename T, std::size_t... Is>
+constexpr std::array<T, sizeof...(Is)> create_array(T value, std::index_sequence<Is...>)
+{
+  // cast Is to void to remove the warning: unused value
+  return {{(static_cast<void>(Is), value)...}};
+}
+}  // namespace detail
+
+template <std::size_t N, typename T>
+constexpr std::array<T, N> create_array(const T& value)
+{
+  return detail::create_array(value, std::make_index_sequence<N>());
+}
 
 }  // namespace mola
