@@ -152,7 +152,8 @@ void VisualInertialOdometry::initialize_frontend(const Yaml& c)
   // profiler_.enable(params_.pipeline_profiler_enabled);
 
   // Basalt VIO initialization:
-  // state_.vio_config.xxx
+  // state_.vio_config.load(...);
+  state_.vio_config.vio_debug = true;
 
   // end of initialization:
   {
