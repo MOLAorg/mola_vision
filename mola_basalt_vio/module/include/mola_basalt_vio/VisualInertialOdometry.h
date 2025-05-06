@@ -43,6 +43,21 @@
 #include <mrpt/poses/CPose3DInterpolator.h>
 #include <mrpt/poses/CPose3DPDFGaussian.h>
 
+// Basalt:
+#include <basalt/io/dataset_io.h>
+#include <basalt/io/marg_data_io.h>
+#include <basalt/serialization/headers_serialization.h>
+#include <basalt/spline/se3_spline.h>
+#include <basalt/utils/system_utils.h>
+#include <basalt/vi_estimator/vio_estimator.h>
+#include <tbb/concurrent_unordered_map.h>
+#include <tbb/global_control.h>
+
+#include <basalt/calibration/calibration.hpp>
+#include <basalt/utils/format.hpp>
+#include <basalt/utils/time_utils.hpp>
+#include <sophus/se3.hpp>
+
 // STD:
 #include <cstdint>
 #include <cstdlib>
@@ -207,6 +222,13 @@ class VisualInertialOdometry : public mola::FrontEndBase, public mola::Localizat
     // ------ ^^^ end of these flags are protected ^^^^      ---------
 
     // All other fields are protected by state_mtx_
+
+    // VIO variables
+    basalt::Calibration<double>   calib;
+    basalt::VioDatasetPtr         vio_dataset;
+    basalt::VioConfig             vio_config;
+    basalt::OpticalFlowBase::Ptr  opt_flow_ptr;
+    basalt::VioEstimatorBase::Ptr vio;
 
     mrpt::poses::CPose3DPDFGaussian last_vio_pose;  //!< in local map
 
