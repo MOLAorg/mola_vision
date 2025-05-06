@@ -1,0 +1,3 @@
+[submodule "mola_basalt_vio/3rdparty/basalt"]
+	path = mola_basalt_vio/3rdparty/basalt
+	url = https://gitlab.com/VladyslavUsenko/basalt.git
