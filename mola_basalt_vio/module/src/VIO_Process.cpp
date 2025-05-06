@@ -187,7 +187,7 @@ void VisualInertialOdometry::processImage(const CObservation::Ptr& o)
 
     // Connect the input queue of VIO to the output of the optical flow:
     state_.opt_flow_ptr->output_queue = &state_.vio->vision_data_queue;
-    state_.vio->out_state_queue       = &state_.out_state_queue;
+    state_.vio->out_state_queue       = &out_state_queue_;
   }
 
   // Send the image to the optical flow:
@@ -239,7 +239,7 @@ void VisualInertialOdometry::spinOnce()
   basalt::PoseVelBiasState<double>::Ptr data;
   while (true)
   {
-    state_.out_state_queue.pop(data);
+    out_state_queue_.pop(data);
 
     if (!data.get())
     {
@@ -253,6 +253,8 @@ void VisualInertialOdometry::spinOnce()
     Eigen::Vector3d vel_w_i = data->vel_w_i;
     Eigen::Vector3d bg      = data->bias_gyro;
     Eigen::Vector3d ba      = data->bias_accel;
+
+    std::cerr << "T_w_i:\n" << T_w_i.matrix() << std::endl;
 
     // vio_t_ns.emplace_back(data->t_ns);
     // vio_t_w_i.emplace_back(T_w_i.translation());

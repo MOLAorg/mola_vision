@@ -37,6 +37,9 @@
 namespace mola
 {
 
+// arguments: class_name, parent_class, class namespace
+IMPLEMENTS_MRPT_OBJECT(VisualInertialOdometry, FrontEndBase, mola)
+
 VisualInertialOdometry::VisualInertialOdometry() {}
 
 VisualInertialOdometry::~VisualInertialOdometry()
@@ -55,6 +58,37 @@ VisualInertialOdometry::~VisualInertialOdometry()
 
   // todo: better synchronous ending:
   std::this_thread::sleep_for(std::chrono::seconds(1));
+}
+
+void VisualInertialOdometry::reset()
+{
+  ASSERTMSG_(!lastInitConfig_.empty(), "initialize() must be called first.");
+
+  auto lck = mrpt::lockHelper(state_mtx_);
+
+  state_ = MethodState();
+  initialize(lastInitConfig_);
+}
+
+bool VisualInertialOdometry::isBusy() const
+{
+  bool b;
+  is_busy_mtx_.lock();
+  b = (state_.worker_tasks_camera != 0) || (state_.worker_tasks_others != 0);
+  is_busy_mtx_.unlock();
+  return b || worker_.pendingTasks();
+}
+
+bool VisualInertialOdometry::isActive() const
+{
+  auto lckStateFlags = mrpt::lockHelper(state_flags_mtx_);
+  return state_.active;
+}
+
+void VisualInertialOdometry::setActive(const bool active)
+{
+  auto lckStateFlags = mrpt::lockHelper(state_flags_mtx_);
+  state_.active      = active;
 }
 
 void VisualInertialOdometry::initialize_frontend(const Yaml& c)
@@ -132,6 +166,52 @@ void VisualInertialOdometry::initialize_frontend(const Yaml& c)
   onExposeParameters();
 
   MRPT_TRY_END
+}
+
+void VisualInertialOdometry::addDropStats(bool frame_is_dropped)
+{
+  state_.drop_frames_stats_good[state_.drop_frames_stats_next_index]    = !frame_is_dropped;
+  state_.drop_frames_stats_dropped[state_.drop_frames_stats_next_index] = frame_is_dropped;
+  if (++state_.drop_frames_stats_next_index >= MethodState::DROP_STATS_WINDOW_LENGHT)
+  {
+    state_.drop_frames_stats_next_index = 0;
+  }
+}
+
+double VisualInertialOdometry::getDropStats() const
+{
+  auto       lckStateFlags = mrpt::lockHelper(state_flags_mtx_);
+  const auto good =
+      std::count(state_.drop_frames_stats_good.begin(), state_.drop_frames_stats_good.end(), true);
+  const auto bad = std::count(
+      state_.drop_frames_stats_dropped.begin(), state_.drop_frames_stats_dropped.end(), true);
+  const auto total = static_cast<double>(good + bad);
+  return total != 0 ? static_cast<double>(bad) / total : .0;
+}
+
+void VisualInertialOdometry::enqueue_request(const std::function<void()>& userRequest)
+{
+  auto lck = mrpt::lockHelper(requests_mtx_);
+  requests_.push_back(userRequest);
+}
+
+void VisualInertialOdometry::processPendingUserRequests()
+{
+  auto lckState = mrpt::lockHelper(state_mtx_);
+  auto lck      = mrpt::lockHelper(requests_mtx_);
+
+  for (const auto& r : requests_)
+  {
+    try
+    {
+      r();
+    }
+    catch (const std::exception& e)
+    {
+      MRPT_LOG_ERROR_STREAM("Error processing asynchronous enqueue_request(): " << e.what());
+    }
+  }
+  requests_.clear();
 }
 
 }  // namespace mola
