@@ -119,8 +119,6 @@ class VisualInertialOdometry : public mola::FrontEndBase, public mola::Localizat
      */
     std::optional<std::regex> imu_sensor_label;
 
-    bool use_imu = true;
-
     struct Visualization
     {
       int    map_update_decimation       = 10;
@@ -165,6 +163,9 @@ class VisualInertialOdometry : public mola::FrontEndBase, public mola::Localizat
     bool start_active = true;
 
     int32_t max_camera_queue_before_drop = 15;
+
+    /** Use Visual Inertial Odometry (VIO) (true) or Visual Odometry (VO) (false) */
+    bool use_imu = false;
 
     /** When publishing pose updates, the reference frame for both, estimated robot poses, and the
      * local map.*/
@@ -224,11 +225,13 @@ class VisualInertialOdometry : public mola::FrontEndBase, public mola::Localizat
     // All other fields are protected by state_mtx_
 
     // VIO variables
-    basalt::Calibration<double>   calib;
-    basalt::VioDatasetPtr         vio_dataset;
-    basalt::VioConfig             vio_config;
-    basalt::OpticalFlowBase::Ptr  opt_flow_ptr;
-    basalt::VioEstimatorBase::Ptr vio;
+    std::optional<basalt::Calibration<double>> calibration;
+    basalt::VioDatasetPtr                      vio_dataset;
+    basalt::VioConfig                          vio_config;
+    basalt::OpticalFlowBase::Ptr               opt_flow_ptr;
+    basalt::VioEstimatorBase::Ptr              vio;
+
+    tbb::concurrent_bounded_queue<basalt::PoseVelBiasState<double>::Ptr> out_state_queue;
 
     mrpt::poses::CPose3DPDFGaussian last_vio_pose;  //!< in local map
 
