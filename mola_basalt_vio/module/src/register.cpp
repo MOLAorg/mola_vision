@@ -28,14 +28,14 @@
 // POSSIBILITY OF SUCH DAMAGE.
 // -----------------------------------------------------------------------------
 
-#include <mola_lidar_odometry/LidarOdometry.h>
+#include <mola_basalt_vio/VisualInertialOdometry.h>
 #include <mrpt/core/initializer.h>
 #include <mrpt/rtti/CObject.h>
 
-MRPT_INITIALIZER(do_register_mola_lidar_odometry)
+MRPT_INITIALIZER(do_register_mola_vio_basalt)
 {
   using mrpt::rtti::registerClass;
 
   // Register modules:
-  MOLA_REGISTER_MODULE(mola::LidarOdometry);
+  MOLA_REGISTER_MODULE(mola::VisualInertialOdometry);
 }

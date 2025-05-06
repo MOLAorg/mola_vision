@@ -32,14 +32,16 @@
 // MOLA interfaces:
 #include <mola_kernel/interfaces/FrontEndBase.h>
 #include <mola_kernel/interfaces/LocalizationSourceBase.h>
-#include <mola_kernel/interfaces/RawDataSourceBase.h>
 
 // Other packages:
 
 // MRPT
 #include <mrpt/core/WorkerThreadsPool.h>
 #include <mrpt/obs/obs_frwds.h>
+#include <mrpt/opengl/CSetOfLines.h>
+#include <mrpt/opengl/CSetOfObjects.h>
 #include <mrpt/poses/CPose3DInterpolator.h>
+#include <mrpt/poses/CPose3DPDFGaussian.h>
 
 // STD:
 #include <cstdint>
@@ -57,15 +59,19 @@ namespace mola
  *   [DOI:10.1109/LRA.2019.2961227] [arXiv:1904.06504].
  *
  */
-class VisualInertialOdometry : public mola::FrontEndBase,
-                               public mola::LocalizationSourceBase,
-                               public mola::RawDataSourceBase  // for publishing debug images only
+class VisualInertialOdometry : public mola::FrontEndBase, public mola::LocalizationSourceBase
 {
   DEFINE_MRPT_OBJECT(VisualInertialOdometry, mola)
 
  public:
   VisualInertialOdometry();
   ~VisualInertialOdometry() override;
+
+  // Rule of five: explicitly define or delete special member functions
+  VisualInertialOdometry(const VisualInertialOdometry&)                = delete;
+  VisualInertialOdometry& operator=(const VisualInertialOdometry&)     = delete;
+  VisualInertialOdometry(VisualInertialOdometry&&) noexcept            = delete;
+  VisualInertialOdometry& operator=(VisualInertialOdometry&&) noexcept = delete;
 
   /** @name Main API
    * @{ */
@@ -202,60 +208,21 @@ class VisualInertialOdometry : public mola::FrontEndBase,
 
     // All other fields are protected by state_mtx_
 
-    // will be true after the first incoming LiDAR frame and re-localization is enabled and run
-    bool initial_localization_done = false;
+    mrpt::poses::CPose3DPDFGaussian last_vio_pose;  //!< in local map
 
-    mrpt::poses::CPose3DPDFGaussian last_lidar_pose;  //!< in local map
+    bool last_vio_was_good = true;
 
-    std::map<std::string, mrpt::Clock::time_point> last_obs_tim_by_label;
-    bool                                           last_icp_was_good = true;
-    double                                         last_icp_quality  = .0;
-
-    std::optional<mrpt::Clock::time_point> first_ever_timestamp;
     std::optional<mrpt::Clock::time_point> last_obs_timestamp;
-    std::optional<mrpt::Clock::time_point> last_icp_timestamp;
+    std::optional<mrpt::Clock::time_point> last_vio_timestamp;
 
-    /// Cache for multiple LIDAR synchronization:
-    std::map<std::string /*label*/, mrpt::obs::CObservation::Ptr> sync_obs;
-
-    // navstate_fuse to merge pose estimates, IMU, odom, estimate twist.
-    std::shared_ptr<mola::NavStateFilter> navstate_fuse;
-
-    std::optional<NavState> last_motion_model_output;
-
-    /// The source of "dynamic variables" in ICP pipelines:
-    mp2p_icp::ParameterSource parameter_source;
-
-    // KISS-ICP-like adaptive threshold method:
-    double adapt_thres_sigma = 0;  // 0: initial
-
-    // Automatic estimation of max range:
-    std::optional<double> estimated_sensor_max_range;
-    std::optional<double> instantaneous_sensor_max_range;
-
-    mp2p_icp_filters::GeneratorSet   obs_generators;
-    mp2p_icp_filters::FilterPipeline pc_filterAdjustTimes;
-    mp2p_icp_filters::FilterPipeline pc_filter1, pc_filter2, pc_filter3;
-    mp2p_icp_filters::GeneratorSet   local_map_generators;
-    mp2p_icp::metric_map_t::Ptr      local_map = mp2p_icp::metric_map_t::Create();
-    mp2p_icp_filters::FilterPipeline obs2map_merge;
+    /// Cache for multiple Image synchronization:
+    // std::map<std::string /*label*/, mrpt::obs::CObservation::Ptr> sync_obs;
 
     mrpt::poses::CPose3DInterpolator estimated_trajectory;
-    mrpt::maps::CSimpleMap           reconstructed_simplemap;
-
-    // to check for map updates. Defined as optional<> so we enforce
-    // setting their type in the ctor:
-    std::optional<SearchablePoseList> distance_checker_local_map;
-    std::optional<SearchablePoseList> distance_checker_simplemap;
-
-    /// See check_for_removal_every_n
-    uint32_t localmap_check_removal_counter     = 0;
-    uint32_t localmap_advertise_updates_counter = std::numeric_limits<uint32_t>::max();
 
     /// To update the map in the viz only if really needed
-    bool local_map_needs_viz_update     = true;
-    bool local_map_needs_publish        = true;
-    bool local_map_georef_needs_publish = true;
+    bool local_map_needs_viz_update = true;
+    bool local_map_needs_publish    = true;
 
     void mark_local_map_as_updated()
     {
@@ -263,57 +230,35 @@ class VisualInertialOdometry : public mola::FrontEndBase,
       local_map_needs_publish    = true;
     }
 
-    void mark_local_map_georef_as_updated() { local_map_georef_needs_publish = true; }
-
-    /// To handle post-re-localization. >0 means we are "recovering" from a request to re-localize:
-    uint32_t step_counter_post_relocalization = 0;
-
-    // GNSS: keep a list of recent observations to later on search the one
-    // closest to each LIDAR observation:
-    std::map<mrpt::Clock::time_point, std::shared_ptr<mrpt::obs::CObservationGPS>> last_gnss_;
-
     // Visualization:
     mrpt::opengl::CSetOfObjects::Ptr glVehicleFrame, glPathGrp;
     mrpt::opengl::CSetOfLines::Ptr   glEstimatedPath;
     int                              mapUpdateCnt = std::numeric_limits<int>::max();
 
-    // List of old observations to be unload()'ed, to save RAM if:
-    // 1) building a simplemap, and
-    // 2) Using a dataset source that supports lazy-load:
-    mutable std::map<mrpt::Clock::time_point, mrpt::obs::CSensoryFrame::Ptr>
-        past_simplemaps_observations;
-
   };  // end of MethodState
 
-  /** The worker thread pool with 1 thread for processing incomming
-   * IMU or LIDAR observations*/
+  /** The worker thread pool with 1 thread for processing incoming IMU or Image observations*/
   mrpt::WorkerThreadsPool worker_{
-      1 /*num threads*/, mrpt::WorkerThreadsPool::POLICY_FIFO, "worker_lidar_odom"};
+      1 /*num threads*/, mrpt::WorkerThreadsPool::POLICY_FIFO, "worker_vio"};
 
   MethodState        state_;
   const MethodState& state() const { return state_; }
   MethodState        stateCopy() const { return state_; }
 
-  // Accessing this struct in gui_ requires adquiring state_gui_mtx_
+  // Accessing this struct in gui_ requires adcquiring state_gui_mtx_
   struct StateUI
   {
     StateUI() = default;
 
     double timestampLastUpdateUI = 0;
 
-    nanogui::Window*   ui              = nullptr;
-    nanogui::Label*    lbIcpQuality    = nullptr;
-    nanogui::Label*    lbSigma         = nullptr;
-    nanogui::Label*    lbSensorRange   = nullptr;
-    nanogui::Label*    lbTime          = nullptr;
-    nanogui::Label*    lbSpeed         = nullptr;
-    nanogui::Label*    lbLidarQueue    = nullptr;
-    nanogui::CheckBox* cbActive        = nullptr;
-    nanogui::CheckBox* cbMapping       = nullptr;
-    nanogui::CheckBox* cbSaveSimplemap = nullptr;
+    nanogui::Window* ui = nullptr;
+    // nanogui::Label*    lbIcpQuality    = nullptr;
+    // nanogui::CheckBox* cbActive        = nullptr;
+    // nanogui::CheckBox* cbMapping       = nullptr;
   };
 
-  // Accessing this struct in gui_ requires adquiring state_gui_mtx_
+  // Accessing this struct in gui_ requires adcquiring state_gui_mtx_
   StateUI gui_;
 
   /// The configuration used in the last call to initialize()
@@ -324,14 +269,13 @@ class VisualInertialOdometry : public mola::FrontEndBase,
   mutable std::mutex           state_flags_mtx_;
   mutable std::recursive_mutex state_mtx_;
   mutable std::mutex           state_trajectory_mtx_;
-  mutable std::recursive_mutex state_simplemap_mtx_;
   mutable std::mutex           state_gui_mtx_;
 
   /// The list of pending tasks from enqueue_request():
   std::vector<std::function<void()>> requests_;
   std::mutex                         requests_mtx_;
 
-  /// Must be called from a scope with state_flags_mtx_ already adquired!
+  /// Must be called from a scope with state_flags_mtx_ already adcquired!
   void addDropStats(bool frame_is_dropped);
 
   /// Returns the ratio [0,1] of lidar frames dropped due to slow processing in the last few
@@ -341,28 +285,13 @@ class VisualInertialOdometry : public mola::FrontEndBase,
   // Process requests_(), at the spinOnce() rate.
   void processPendingUserRequests();
 
-  void onLidar(const CObservation::Ptr& o);
-  void processLidarScan(const CObservation::Ptr& obs);
+  void onImage(const CObservation::Ptr& o);
+  void processImage(const CObservation::Ptr& obs);
 
   void onIMU(const CObservation::Ptr& o);
   void onIMUImpl(const CObservation::Ptr& o);
 
-  void onGPS(const CObservation::Ptr& o);
-  void onGPSImpl(const CObservation::Ptr& o);
-
-  // KISS-ICP adaptive threshold method:
-  void doUpdateAdaptiveThreshold(const mrpt::poses::CPose3D& lastMotionModelError);
-
-  void doInitializeEstimatedMaxSensorRange(const mrpt::obs::CObservation& o);
-  void doUpdateEstimatedMaxSensorRange(const mp2p_icp::metric_map_t& m);
-
-  /// Returns false if the scan/observation is not valid:
-  bool doCheckIsValidObservation(const mp2p_icp::metric_map_t& m);
-
-  void updatePipelineDynamicVariables();
-  void updatePipelineTwistVariables(const mrpt::math::TTwist3D& tw);
-
-  void updateVisualization(const mp2p_icp::metric_map_t& currentObservation);
+  // void updateVisualization(const mp2p_icp::metric_map_t& currentObservation);
 
   void internalBuildGUI();
 
@@ -370,21 +299,7 @@ class VisualInertialOdometry : public mola::FrontEndBase,
 
   void doPublishUpdatedMap(const mrpt::Clock::time_point& this_obs_tim);
 
-  void                         doWriteDebugTracesFile(const mrpt::Clock::time_point& this_obs_tim);
-  std::optional<std::ofstream> debug_traces_of_;
-
-  void unloadPastSimplemapObservations(const size_t maxSizeUnloadQueue) const;
-
-  void handleUnloadSinglePastObservation(CObservation::Ptr& o) const;
-
   void onPublishDiagnostics();
-  void handleInitialLocalization();
 };
 
 }  // namespace mola
-
-MRPT_ENUM_TYPE_BEGIN_NAMESPACE(mola, mola::InitLocalization)
-MRPT_FILL_ENUM(InitLocalization::FixedPose);
-MRPT_FILL_ENUM(InitLocalization::FromStateEstimator);
-MRPT_FILL_ENUM(InitLocalization::PitchAndRollFromIMU);
-MRPT_ENUM_TYPE_END()
