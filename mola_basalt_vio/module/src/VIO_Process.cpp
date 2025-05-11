@@ -147,7 +147,7 @@ void VisualInertialOdometry::processImageSet(
   // make sure data is loaded, if using an offline lazy-load dataset.
   for (auto& obs : obs_list)
   {
-    ASSERT_(!obs);
+    ASSERT_(obs);
     obs->load();
   }
 
