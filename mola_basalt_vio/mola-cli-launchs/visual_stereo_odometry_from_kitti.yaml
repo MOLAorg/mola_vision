@@ -1,7 +1,9 @@
 # -----------------------------------------------------------------------------
 #                        SLAM system definition for MOLA
 # This file defines:
-# An input sensor from a ROS 2 topic, and the MOLA Visualizer.
+# - Input dataset from KITTI
+# - Basalt-based visual odometry (stereo)
+# - MolaViz for GUI
 # -----------------------------------------------------------------------------
 
 modules:
@@ -27,6 +29,9 @@ modules:
       - raw_sensor_label: image_0
         decimation: 1
         win_pos: 5 370 600 200
+      - raw_sensor_label: image_1
+        decimation: 1
+        win_pos: 5 600 600 200
     params:
       base_dir: ${KITTI_BASE_DIR}
       sequence: ${KITTI_SEQ}
@@ -34,7 +39,7 @@ modules:
       start_paused: ${MOLA_DATASET_START_PAUSED|false}
       publish_lidar: false
       publish_image_0: true
-      publish_image_1: false
+      publish_image_1: true
       publish_ground_truth: true
 
   - name: vi_odom
@@ -45,7 +50,10 @@ modules:
     # with the LIDAR-Odometry pipeline configuration:
     #params: "${MOLA_ODOMETRY_PIPELINE_YAML|../pipelines/vio-default.yaml}"
     params:
-      camera_sensor_labels: "image_0"
+      # List of sensor labels or regex's to be matched to input observations
+      # to be used as camera image observations. Monocular systems will have only one entry, stereo
+      # two camera labels. More than 2 are also supported by Basalt.
+      camera_sensor_labels: [image_0, image_1]
       imu_sensor_label: "imu"
 
       # Use Visual Inertial Odometry (VIO) (true) or Visual Odometry (VO) (false)

@@ -35,9 +35,8 @@
 #include <mola_kernel/interfaces/ExecutableBase.h>  // mola::ProfilerEntry
 #include <mrpt/core/exceptions.h>  // MRPT_TRY_START
 #include <mrpt/core/lock_helper.h>
-#include <mrpt/obs/CObservationGPS.h>
 #include <mrpt/obs/CObservationIMU.h>
-#include <mrpt/obs/CObservationOdometry.h>
+#include <mrpt/obs/CObservationImage.h>
 
 // Std:
 #include <regex>
@@ -95,14 +94,32 @@ void VisualInertialOdometry::onNewObservation(const CObservation::Ptr& o)
   }
 
   // Is it a camera obs?
-  for (const auto& re : params_.camera_sensor_labels)
+  for (const auto& label : params_.camera_sensor_labels)
   {
-    if (!std::regex_match(o->sensorLabel, re))
+    if (o->sensorLabel != label)
     {
       continue;
     }
 
     // Yes, it's a camera obs:
+    auto obs = std::dynamic_pointer_cast<mrpt::obs::CObservationImage>(o);
+    if (!obs)
+    {
+      THROW_EXCEPTION_FMT(
+          "Expected CObservationImage input, got: %s", o->GetRuntimeClass()->className);
+    }
+
+    // Do we have all required images?
+    state_.input_synchronizer.add(o);
+
+    const auto input_obs_set_opt = state_.input_synchronizer.getObservationGroup();
+    if (!input_obs_set_opt.has_value())
+    {
+      continue;
+    }
+
+    // Yes, we have all images (1 for monocular, 2 for stereo, etc.)
+
     const int queued = [this]()
     {
       auto lck = mrpt::lockHelper(is_busy_mtx_);
@@ -128,8 +145,17 @@ void VisualInertialOdometry::onNewObservation(const CObservation::Ptr& o)
       state_.worker_tasks_camera++;
     }
 
+    MRPT_LOG_INFO_STREAM("Synchronized observations: " << input_obs_set_opt->size());
+
+    std::vector<std::shared_ptr<mrpt::obs::CObservationImage>> imageObs;
+    for (const auto& [lb, this_obs] : *input_obs_set_opt)
+    {
+      imageObs.push_back(std::dynamic_pointer_cast<mrpt::obs::CObservationImage>(this_obs));
+      MRPT_LOG_INFO_STREAM(" - Obs: " << lb << ": " << this_obs->asString());
+    }
+
     // Enqueue task:
-    auto fut = worker_.enqueue(&VisualInertialOdometry::onImage, this, o);
+    auto fut = worker_.enqueue(&VisualInertialOdometry::onImageSet, this, imageObs);
 
     (void)fut;
 
@@ -139,7 +165,8 @@ void VisualInertialOdometry::onNewObservation(const CObservation::Ptr& o)
   MRPT_TRY_END
 }
 
-void VisualInertialOdometry::onImage(const CObservation::Ptr& o)
+void VisualInertialOdometry::onImageSet(
+    const std::vector<std::shared_ptr<mrpt::obs::CObservationImage>>& obs)
 {
   const bool abort_running = [this]()
   {
@@ -153,7 +180,7 @@ void VisualInertialOdometry::onImage(const CObservation::Ptr& o)
   {
     try
     {
-      processImage(o);
+      processImageSet(obs);
     }
     catch (const std::exception& e)
     {

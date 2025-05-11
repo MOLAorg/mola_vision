@@ -29,11 +29,10 @@
 // -----------------------------------------------------------------------------
 #pragma once
 
-// MOLA interfaces:
+// MOLA interfaces & classes:
 #include <mola_kernel/interfaces/FrontEndBase.h>
 #include <mola_kernel/interfaces/LocalizationSourceBase.h>
-
-// Other packages:
+#include <mola_kernel/utils/Synchronizer.h>
 
 // MRPT
 #include <mrpt/core/WorkerThreadsPool.h>
@@ -44,6 +43,12 @@
 #include <mrpt/poses/CPose3DPDFGaussian.h>
 
 // Basalt:
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#pragma GCC diagnostic ignored "-Wshadow"
+#endif
+
 #include <basalt/io/dataset_io.h>
 #include <basalt/io/marg_data_io.h>
 #include <basalt/serialization/headers_serialization.h>
@@ -57,6 +62,10 @@
 #include <basalt/utils/format.hpp>
 #include <basalt/utils/time_utils.hpp>
 #include <sophus/se3.hpp>
+
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 // STD:
 #include <cstdint>
@@ -112,10 +121,11 @@ class VisualInertialOdometry : public mola::FrontEndBase, public mola::Localizat
 
   struct Parameters
   {
-    /** List of sensor labels or regex's to be matched to input observations
-     *  to be used as camera image observations.
+    /** List of sensor labels for input observations to be used as camera image observations.
+     *  Monocular systems will have only one entry, stereo
+     *  two camera labels. More than 2 are also supported by Basalt.
      */
-    std::vector<std::regex> camera_sensor_labels;
+    std::vector<std::string> camera_sensor_labels;
 
     /** Sensor labels or regex to be matched to input observations
      *  to be used as raw IMU observations.
@@ -236,6 +246,9 @@ class VisualInertialOdometry : public mola::FrontEndBase, public mola::Localizat
 
     mrpt::poses::CPose3DPDFGaussian last_vio_pose;  //!< in local map
 
+    /// Used to synchronize stereo camera images
+    mola::Synchronizer input_synchronizer;
+
     bool last_vio_was_good = true;
 
     std::optional<mrpt::Clock::time_point> last_obs_timestamp;
@@ -320,8 +333,8 @@ class VisualInertialOdometry : public mola::FrontEndBase, public mola::Localizat
   // Process requests_(), at the spinOnce() rate.
   void processPendingUserRequests();
 
-  void onImage(const CObservation::Ptr& o);
-  void processImage(const CObservation::Ptr& obs);
+  void onImageSet(const std::vector<std::shared_ptr<mrpt::obs::CObservationImage>>& obs);
+  void processImageSet(const std::vector<std::shared_ptr<mrpt::obs::CObservationImage>>& obs);
 
   void onIMU(const CObservation::Ptr& o);
   void onIMUImpl(const CObservation::Ptr& o);
