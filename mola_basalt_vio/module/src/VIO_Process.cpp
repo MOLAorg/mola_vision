@@ -132,29 +132,26 @@ namespace mola
 {
 
 // here happens the main stuff:
-void VisualInertialOdometry::processImage(const CObservation::Ptr& o)
+void VisualInertialOdometry::processImageSet(
+    const std::vector<std::shared_ptr<mrpt::obs::CObservationImage>>& obs_list)
 {
   using namespace std::string_literals;
 
   // Check if we need to process any pending async request:
   processPendingUserRequests();
 
-  auto obs = std::dynamic_pointer_cast<mrpt::obs::CObservationImage>(o);
-  if (!obs)
-  {
-    THROW_EXCEPTION_FMT(
-        "Expected CObservationImage input, got: %s", o->GetRuntimeClass()->className);
-  }
-
   auto lckState = mrpt::lockHelper(state_mtx_);
 
   profiler_.leave("delay_onNewObs_to_process");
 
   // make sure data is loaded, if using an offline lazy-load dataset.
-  obs->load();
+  for (auto& obs : obs_list)
+  {
+    ASSERT_(!obs);
+    obs->load();
+  }
 
-  // Only process pointclouds that are sufficiently apart in time:
-  const auto this_obs_tim = obs->timestamp;
+  const auto this_obs_tim = (*obs_list.begin())->timestamp;
 
   const ProfilerEntry tleg(profiler_, "onImage");
 
@@ -165,16 +162,19 @@ void VisualInertialOdometry::processImage(const CObservation::Ptr& o)
 
     auto& calibration = state_.calibration.emplace();
 
-    // TODO! Camera to IMU transform:
-    calibration.T_i_c.resize(1);
-    calibration.T_i_c.at(0) = Sophus::SE3d();
-
-    calibration.intrinsics.resize(1);
-    auto& intrinsics = calibration.intrinsics.at(0);
-    intrinsics       = mrpt_to_basalt_camera_model(obs->cameraParams);
-
-    calibration.resolution.resize(1);
-    calibration.resolution.at(0) = {obs->cameraParams.ncols, obs->cameraParams.nrows};
+    // TODO: At present IMU is assumed to be at vehicle origin:
+    // Camera to IMU transform:
+    calibration.T_i_c.clear();
+    calibration.intrinsics.clear();
+    calibration.resolution.clear();
+    for (const auto& cam_obs : obs_list)
+    {
+      const auto tf = Sophus::SE3d(
+          cam_obs->cameraPose.getHomogeneousMatrixVal<mrpt::math::CMatrixDouble44>().asEigen());
+      calibration.T_i_c.push_back(tf);
+      calibration.intrinsics.push_back(mrpt_to_basalt_camera_model(cam_obs->cameraParams));
+      calibration.resolution.push_back({cam_obs->cameraParams.ncols, cam_obs->cameraParams.nrows});
+    }
 
     // Initialize basalt VIO pipeline:
     state_.opt_flow_ptr =
@@ -194,9 +194,12 @@ void VisualInertialOdometry::processImage(const CObservation::Ptr& o)
   {
     auto img_data = std::make_shared<basalt::OpticalFlowInput>();
 
-    img_data->t_ns = static_cast<int64_t>(mrpt::Clock::toDouble(obs->timestamp) * 1e9);
-    img_data->img_data.resize(1);  // 1 image, monocular.
-    img_data->img_data.at(0) = cv_to_basalt_image(obs->image.asCvMatRef());
+    img_data->t_ns = static_cast<int64_t>(mrpt::Clock::toDouble(this_obs_tim) * 1e9);
+
+    for (const auto& cam_obs : obs_list)
+    {
+      img_data->img_data.push_back(cv_to_basalt_image(cam_obs->image.asCvMatRef()));
+    }
 
     state_.opt_flow_ptr->input_queue.push(img_data);
   }

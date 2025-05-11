@@ -126,6 +126,22 @@ void VisualInertialOdometry::initialize_frontend(const Yaml& c)
   }
   ASSERT_(!params_.camera_sensor_labels.empty());
 
+  std::string all_obs_labels;
+  for (const auto& label : params_.camera_sensor_labels)
+  {
+    state_.input_synchronizer.parameters.expected_observation_labels.insert(label);
+    all_obs_labels += label;
+    all_obs_labels += ", ";
+  }
+  MRPT_LOG_INFO_STREAM(
+      "Synchronizer initialized to expect "
+      << state_.input_synchronizer.parameters.expected_observation_labels.size()
+      << " observations: " << all_obs_labels);
+
+  // TODO(JLBC): Expose synchronizer params:
+  // state_.input_synchronizer.parameters.window_length
+  state_.input_synchronizer.parameters.synchronization_tolerance = 20e-3;  // 20ms
+
   if (cfg.has("imu_sensor_label"))
   {
     params_.imu_sensor_label = cfg["imu_sensor_label"].as<std::string>();
