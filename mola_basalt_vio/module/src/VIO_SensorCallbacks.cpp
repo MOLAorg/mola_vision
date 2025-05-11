@@ -145,13 +145,12 @@ void VisualInertialOdometry::onNewObservation(const CObservation::Ptr& o)
       state_.worker_tasks_camera++;
     }
 
-    MRPT_LOG_INFO_STREAM("Synchronized observations: " << input_obs_set_opt->size());
+    MRPT_LOG_DEBUG_STREAM("Synchronized observations: " << input_obs_set_opt->size());
 
     std::vector<std::shared_ptr<mrpt::obs::CObservationImage>> imageObs;
     for (const auto& [lb, this_obs] : *input_obs_set_opt)
     {
       imageObs.push_back(std::dynamic_pointer_cast<mrpt::obs::CObservationImage>(this_obs));
-      MRPT_LOG_INFO_STREAM(" - Obs: " << lb << ": " << this_obs->asString());
     }
 
     // Enqueue task:
