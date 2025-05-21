@@ -46,6 +46,12 @@ namespace mola
 
 void VisualInertialOdometry::onNewObservation(const CObservation::Ptr& o)
 {
+  auto fut = worker_.enqueue(&VisualInertialOdometry::onNewObservationImpl, this, o);
+  (void)fut;
+}
+
+void VisualInertialOdometry::onNewObservationImpl(const CObservation::Ptr& o)
+{
   MRPT_TRY_START
   const ProfilerEntry tleg(profiler_, "onNewObservation");
 
@@ -83,14 +89,8 @@ void VisualInertialOdometry::onNewObservation(const CObservation::Ptr& o)
   if (params_.imu_sensor_label &&
       std::regex_match(o->sensorLabel, params_.imu_sensor_label.value()))
   {
-    {
-      auto lck = mrpt::lockHelper(is_busy_mtx_);
-      state_.worker_tasks_others++;
-    }
-
     // Yes, it's an IMU obs:
-    auto fut = worker_.enqueue(&VisualInertialOdometry::onIMU, this, o);
-    (void)fut;
+    onIMU(o);
   }
 
   // Is it a camera obs?
@@ -120,31 +120,6 @@ void VisualInertialOdometry::onNewObservation(const CObservation::Ptr& o)
 
     // Yes, we have all images (1 for monocular, 2 for stereo, etc.)
 
-    const int queued = [this]()
-    {
-      auto lck = mrpt::lockHelper(is_busy_mtx_);
-      return state_.worker_tasks_camera;
-    }();
-
-    profiler_.registerUserMeasure("onNewObservation.camera_queue_length", queued);
-    if (queued > params_.max_camera_queue_before_drop)
-    {
-      MRPT_LOG_THROTTLE_WARN_FMT(
-          1.0,
-          "Dropping observation due to camera worker thread too busy (dropped frames: %.02f%%)",
-          getDropStats() * 100.0);
-      profiler_.registerUserMeasure("onNewObservation.drop_observation", 1);
-      addDropStats(true);
-      return;
-    }
-    addDropStats(false);
-    profiler_.enter("delay_onNewObs_to_process");
-
-    {
-      auto lck = mrpt::lockHelper(is_busy_mtx_);
-      state_.worker_tasks_camera++;
-    }
-
     MRPT_LOG_DEBUG_STREAM("Synchronized observations: " << input_obs_set_opt->size());
 
     std::vector<std::shared_ptr<mrpt::obs::CObservationImage>> imageObs;
@@ -154,11 +129,7 @@ void VisualInertialOdometry::onNewObservation(const CObservation::Ptr& o)
     }
 
     // Enqueue task:
-    auto fut = worker_.enqueue(&VisualInertialOdometry::onImageSet, this, imageObs);
-
-    (void)fut;
-
-    break;  // do not keep processing the list
+    onImageSet(imageObs);
   }
 
   MRPT_TRY_END
@@ -175,6 +146,7 @@ void VisualInertialOdometry::onImageSet(
 
   // All methods that are enqueued into a thread pool should have its own
   // top-level try-catch:
+
   if (!abort_running)
   {
     try
@@ -187,11 +159,6 @@ void VisualInertialOdometry::onImageSet(
       auto lckStateFlags = mrpt::lockHelper(state_flags_mtx_);
       state_.fatal_error = true;
     }
-  }
-
-  {
-    auto lck = mrpt::lockHelper(is_busy_mtx_);
-    state_.worker_tasks_camera--;
   }
 }
 
@@ -208,11 +175,6 @@ void VisualInertialOdometry::onIMU(const CObservation::Ptr& o)
     MRPT_LOG_ERROR_STREAM("Exception:\n" << mrpt::exception_to_str(e));
     auto lckStateFlags = mrpt::lockHelper(state_flags_mtx_);
     state_.fatal_error = true;
-  }
-
-  {
-    auto lck = mrpt::lockHelper(is_busy_mtx_);
-    state_.worker_tasks_others--;
   }
 }
 

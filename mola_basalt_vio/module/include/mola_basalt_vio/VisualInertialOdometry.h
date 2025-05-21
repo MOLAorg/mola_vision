@@ -108,6 +108,8 @@ class VisualInertialOdometry : public mola::FrontEndBase, public mola::Localizat
   void spinOnce() override;
   void onNewObservation(const CObservation::Ptr& o) override;
 
+  void onNewObservationImpl(const CObservation::Ptr& o);
+
   /** Re-initializes the odometry system. It effectively calls initialize()
    *  once again with the same parameters that were used the first time.
    */
@@ -175,7 +177,7 @@ class VisualInertialOdometry : public mola::FrontEndBase, public mola::Localizat
 
     bool start_active = true;
 
-    int32_t max_camera_queue_before_drop = 15;
+    bool vio_debug_output = false;
 
     /** Use Visual Inertial Odometry (VIO) (true) or Visual Odometry (VO) (false) */
     bool use_imu = false;
@@ -227,12 +229,6 @@ class VisualInertialOdometry : public mola::FrontEndBase, public mola::Localizat
     bool initialized = false;
     bool fatal_error = false;
     bool active      = true;  //!< whether to process or ignore incoming sensors
-    // ------ ^^^ end of these flags are protected ^^^^      ---------
-
-    // ------ these vars are protected by is_busy_mtx_  ---------
-    int worker_tasks_camera = 0;
-    int worker_tasks_others = 0;
-
     // ------ ^^^ end of these flags are protected ^^^^      ---------
 
     // All other fields are protected by state_mtx_
