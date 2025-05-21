@@ -142,8 +142,6 @@ void VisualInertialOdometry::processImageSet(
 
   auto lckState = mrpt::lockHelper(state_mtx_);
 
-  profiler_.leave("delay_onNewObs_to_process");
-
   // make sure data is loaded, if using an offline lazy-load dataset.
   for (auto& obs : obs_list)
   {
@@ -236,8 +234,6 @@ void VisualInertialOdometry::processImageSet(
 
 void VisualInertialOdometry::spinOnce()
 {
-  auto lckState = mrpt::lockHelper(state_mtx_);
-
   // Read all already processed trajectory data:
   basalt::PoseVelBiasState<double>::Ptr data;
   while (true)
@@ -248,6 +244,8 @@ void VisualInertialOdometry::spinOnce()
     {
       break;
     }
+
+    auto lckState = mrpt::lockHelper(state_mtx_);
 
     int64_t t_ns = data->t_ns;
 

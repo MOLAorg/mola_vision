@@ -70,14 +70,7 @@ void VisualInertialOdometry::reset()
   initialize(lastInitConfig_);
 }
 
-bool VisualInertialOdometry::isBusy() const
-{
-  bool b;
-  is_busy_mtx_.lock();
-  b = (state_.worker_tasks_camera != 0) || (state_.worker_tasks_others != 0);
-  is_busy_mtx_.unlock();
-  return b || worker_.pendingTasks();
-}
+bool VisualInertialOdometry::isBusy() const { return worker_.pendingTasks(); }
 
 bool VisualInertialOdometry::isActive() const
 {
@@ -150,6 +143,7 @@ void VisualInertialOdometry::initialize_frontend(const Yaml& c)
   YAML_LOAD_OPT(params_, use_imu, bool);
 
   YAML_LOAD_OPT(params_, start_active, bool);
+  YAML_LOAD_OPT(params_, vio_debug_output, bool);
 
   YAML_LOAD_OPT(params_, publish_reference_frame, std::string);
   YAML_LOAD_OPT(params_, publish_vehicle_frame, std::string);
@@ -169,7 +163,7 @@ void VisualInertialOdometry::initialize_frontend(const Yaml& c)
 
   // Basalt VIO initialization:
   // state_.vio_config.load(...);
-  state_.vio_config.vio_debug = true;
+  state_.vio_config.vio_debug = params_.vio_debug_output;
 
   // end of initialization:
   {
