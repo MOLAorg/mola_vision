@@ -13,3 +13,9 @@ CMakeLists.user*
 *.pyc
 .vscode
 CMakeLists.txt.user*
+.cache
+
+install/
+log/
+build/
+
