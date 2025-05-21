@@ -22,11 +22,12 @@ find_package(mrpt-poses)
 
 # -----------------------
 # define lib:
-set(LIB_SRCS 
-  src/*.cpp
+set(LIB_SRCS
+  src/orb_detector.cpp
+  src/orb_point_pairs.h
 )
-file(LIB_PUBLIC_HDRS
-  include/*.h
+set(LIB_PUBLIC_HDRS
+  #
 )
 
 mola_add_library(
