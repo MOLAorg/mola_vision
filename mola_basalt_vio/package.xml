@@ -9,7 +9,7 @@
   <description>Visual-Inertial Odometry module wrapping Basalt</description>
 
   <maintainer email="joseluisblancoc@gmail.com">Jose-Luis Blanco-Claraco</maintainer>
-  <license>BSD</license>
+  <license>BSD-3-Clause</license>
 
   <url type="website">https://docs.mola-slam.org/</url>
   <url type="repository">https://github.com/MOLAorg/mola_vision/</url>
