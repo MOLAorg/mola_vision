@@ -9,7 +9,7 @@
   <description>Core C++ library for reusable classic computer vision</description>
 
   <maintainer email="joseluisblancoc@gmail.com">Jose-Luis Blanco-Claraco</maintainer>
-  <license file="LICENSE">BSD</license>
+  <license file="LICENSE">BSD-3-Clause</license>
 
   <url type="website">https://github.com/MOLAorg/mola_vision</url>
 
