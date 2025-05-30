@@ -17,6 +17,7 @@
   <!-- core dependencies -->
   <depend>mola_common</depend>
   <depend>mola_kernel</depend>
+  <depend>tbb</depend>
 
   <doc_depend>doxygen</doc_depend>
 
