@@ -1,12 +1,15 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
-<!-- This is a ROS package file, intended to allow this library to be built
-     side-by-side to ROS packages in a catkin/ament environment.
--->
 <package format="3">
   <name>mola_libvision</name>
-  <version>0.0.0</version>
-  <description>Core C++ library for reusable classic computer vision</description>
+  <version>0.1.0</version>
+  <description>
+    Core C++ library for reusable classic computer vision in MOLA.
+    Implements feature detection (Shi-Tomasi, grid distributor), pyramidal
+    Lucas-Kanade optical flow, fundamental matrix RANSAC filtering,
+    DLT triangulation, batch undistortion, and a custom Levenberg-Marquardt
+    optimizer.  No OpenCV or Ceres dependency — uses MRPT v3 + Eigen + TBB.
+  </description>
 
   <maintainer email="joseluisblancoc@gmail.com">Jose-Luis Blanco-Claraco</maintainer>
   <license file="LICENSE">BSD-3-Clause</license>
@@ -14,17 +17,13 @@
   <url type="website">https://github.com/MOLAorg/mola_vision</url>
 
   <depend>mola_common</depend>
-
-  <depend>mrpt_libopengl</depend>  <!-- TO-DO: With MRPT3, make this mrpt_img -->
+  <depend>mrpt_libimg</depend>
   <depend>mrpt_libposes</depend>
 
   <doc_depend>doxygen</doc_depend>
 
-  <!-- Minimum entries to release non-catkin pkgs: -->
   <buildtool_depend>cmake</buildtool_depend>
   <export>
     <build_type>cmake</build_type>
   </export>
-  <!-- End -->
-
 </package>
