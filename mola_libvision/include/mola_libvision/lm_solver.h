@@ -30,6 +30,7 @@ struct LMResult
     MaxIters,
     SmallStep,
     SmallCostChange,
+    SmallGradient,
     Failed
   } reason;
 };
@@ -43,6 +44,7 @@ struct LMConfig
   float lambda_factor  = 2.0f;  ///< Multiply λ on rejection
   float eps_step       = 1e-6f;  ///< Convergence: ‖Δx‖ < eps_step
   float eps_cost       = 1e-8f;  ///< Convergence: |ΔCost/Cost| < eps_cost
+  float eps_grad       = 1e-8f;  ///< Convergence: ‖Jᵀr‖_inf < eps_grad (at optimum)
   int   max_iters      = 50;
   bool  verbose        = false;
 };
@@ -119,6 +121,17 @@ LMResult levenbergMarquardt(
     Eigen::Matrix<float, D, D> H = J.transpose() * J;
     Eigen::Matrix<float, D, 1> b = -(J.transpose() * r);
 
+    // Gradient-norm convergence: at the optimum b = -Jᵀr -> 0. This check
+    // must precede the gain-ratio accept/reject logic, because near the
+    // optimum the model decrease vanishes and every step would be rejected,
+    // leaving the solver looping until max_iters without ever converging.
+    if (b.template lpNorm<Eigen::Infinity>() < cfg.eps_grad)
+    {
+      result.converged = true;
+      result.reason    = LMResult::Reason::SmallGradient;
+      break;
+    }
+
     // Damping: add λ to diagonal (Marquardt variant)
     for (int i = 0; i < H.rows(); ++i) H(i, i) += lambda * H(i, i);
 
@@ -148,8 +161,11 @@ LMResult levenbergMarquardt(
       J    = J_new;
       cost = cost_new;
 
-      // Decrease λ (Nielsen update)
-      lambda *= std::max(1.f / 3.f, 1.f - std::pow(2.f * relative_decrease - 1.f, 3));
+      // Decrease λ (Nielsen update). Keep all arithmetic in float: std::pow
+      // with an int exponent would promote to double and make std::max
+      // ambiguous between its float args.
+      const float nielsen = 2.f * relative_decrease - 1.f;
+      lambda *= std::max(1.f / 3.f, 1.f - nielsen * nielsen * nielsen);
       lambda = std::max(lambda, cfg.lambda_min);
 
       // Convergence checks

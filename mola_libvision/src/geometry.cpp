@@ -6,6 +6,7 @@
 #include <mola_libvision/geometry.h>
 #include <mrpt/img/camera_geometry.h>  // undistort_point()
 
+#include <Eigen/LU>  // determinant()
 #include <Eigen/SVD>
 #include <cmath>
 
@@ -18,14 +19,27 @@ void mola::vision::undistortPoints(
     const std::vector<mrpt::math::TPoint2Df>& pixels, const mrpt::img::TCamera& camera,
     std::vector<mrpt::math::TPoint2Df>& undistorted)
 {
-  undistorted.resize(pixels.size());
+  // This is a thin float facade over MRPT 3.x's batch
+  // camera_geometry::undistort_points_to_unit_plane(), which removes lens
+  // distortion (plumb_bob or Kannala-Brandt, per TCamera) and unprojects to
+  // the z=1 normalized plane. We keep the mola::vision facade because the
+  // SLAM pipeline works with std::vector<TPoint2Df> features; MRPT returns
+  // TPoint2D (double).
+  std::vector<mrpt::img::TPixelCoordf> distorted(pixels.size());
   for (size_t i = 0; i < pixels.size(); ++i)
   {
-    // MRPT undistort_point returns normalized (z=1) undistorted coords
-    double nx, ny;
-    mrpt::img::undistort_point(pixels[i].x, pixels[i].y, camera, nx, ny);
-    undistorted[i].x = static_cast<float>(nx);
-    undistorted[i].y = static_cast<float>(ny);
+    distorted[i].x = pixels[i].x;
+    distorted[i].y = pixels[i].y;
+  }
+
+  std::vector<mrpt::math::TPoint2D> normalized;
+  mrpt::img::camera_geometry::undistort_points_to_unit_plane(distorted, normalized, camera);
+
+  undistorted.resize(normalized.size());
+  for (size_t i = 0; i < normalized.size(); ++i)
+  {
+    undistorted[i].x = static_cast<float>(normalized[i].x);
+    undistorted[i].y = static_cast<float>(normalized[i].y);
   }
 }
 

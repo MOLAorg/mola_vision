@@ -17,10 +17,11 @@ project(mola_libvision LANGUAGES CXX)
 find_package(mola_common REQUIRED)
 
 # Dependencies: MRPT (v3) + Eigen3 + TBB.  NO OpenCV, NO Ceres.
-find_package(mrpt-img   REQUIRED)
-find_package(mrpt-poses REQUIRED)
+# MRPT 3.x uses fine-grained packages "mrpt_<module>" and targets "mrpt::mrpt_<module>".
+find_package(mrpt_img   REQUIRED)
+find_package(mrpt_poses REQUIRED)
 find_package(TBB        REQUIRED)
-find_package(Eigen3     REQUIRED)  # usually pulled in via mrpt-img already
+find_package(Eigen3     REQUIRED)  # usually pulled in via mrpt_img already
 
 # -----------------------
 # Define library:
@@ -50,14 +51,14 @@ mola_add_library(
   TARGET ${PROJECT_NAME}
   SOURCES ${LIB_SRCS} ${LIB_PUBLIC_HDRS}
   PUBLIC_LINK_LIBRARIES
-    mrpt::img
-    mrpt::poses
+    mrpt::mrpt_img
+    mrpt::mrpt_poses
     TBB::tbb
     Eigen3::Eigen
   CMAKE_DEPENDENCIES
     mola_common
-    mrpt-img
-    mrpt-poses
+    mrpt_img
+    mrpt_poses
 )
 
 # C++17 required (for std::optional, structured bindings, etc.)

@@ -6,7 +6,9 @@
 #include <mola_libvision/feature_detection.h>
 #include <mola_libvision/optical_flow.h>
 
+#include <Eigen/Geometry>
 #include <cmath>
+#include <random>
 
 using namespace mola::vision;
 
@@ -119,45 +121,80 @@ TEST(OpticalFlow, LostPointsForBlankCurr)
 // ---------------------------------------------------------------------------
 TEST(OpticalFlow, FMatrixFilter_SyntheticInliers)
 {
-  // Generate correspondences along a known epiline pattern.
-  // Use a simple homography (pure rotation around y by 5°) as ground truth.
-  const float angle = 5.f * static_cast<float>(M_PI) / 180.f;
-  const float ca = std::cos(angle), sa = std::sin(angle);
-  // K = identity (normalized coords), R, t = [0.1, 0, 0]
-  // pts1[i] → pts2[i] = R * pts1[i] + t  (approx, no depth)
+  // Build a genuine (non-degenerate) two-view geometry in PIXEL coordinates.
+  //  - Pinhole camera K (f=500, principal point (320,240)).
+  //  - Second camera = small yaw rotation + sideways translation (baseline).
+  //  - 3D points spread in X,Y at *varying* depths (avoids planar / collinear
+  //    degeneracies that make the fundamental matrix unobservable).
+  // Inlier matches are the projections of the same 3D point in both views;
+  // outliers are random pixel pairs.
+  const double f = 500.0, cx = 320.0, cy = 240.0;
+  auto         project = [&](const Eigen::Vector3d& Pc) -> mrpt::math::TPoint2Df
+  {
+    return {
+        static_cast<float>(f * Pc.x() / Pc.z() + cx), static_cast<float>(f * Pc.y() / Pc.z() + cy)};
+  };
+
+  const double    yaw = 4.0 * M_PI / 180.0;
+  Eigen::Matrix3d R;
+  R = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitY());
+  const Eigen::Vector3d t(0.4, 0.0, 0.0);  // baseline along x
 
   std::vector<mrpt::math::TPoint2Df> p1, p2;
   std::vector<TrackStatus>           status;
 
-  // 40 inliers
-  for (int i = 0; i < 40; ++i)
+  std::mt19937                           rng(1234);
+  std::uniform_real_distribution<double> ux(-2.0, 2.0);
+  std::uniform_real_distribution<double> uy(-1.5, 1.5);
+  std::uniform_real_distribution<double> uz(4.0, 9.0);  // varying depth
+
+  const int nInliers = 40;
+  for (int i = 0; i < nInliers; ++i)
   {
-    const float x = -1.f + 0.05f * i, y = -0.5f + 0.025f * i;
-    p1.push_back({x, y});
-    // Approximate epipolar: p2 ≈ p1 + small translation in x
-    p2.push_back({x + 0.1f * ca, y + 0.1f * sa});
+    const Eigen::Vector3d Pw(ux(rng), uy(rng), uz(rng));
+    const Eigen::Vector3d Pc2 = R * Pw + t;
+    if (Pc2.z() < 0.5)
+    {
+      continue;
+    }
+    p1.push_back(project(Pw));  // first camera at identity
+    p2.push_back(project(Pc2));  // second camera
     status.push_back(TrackStatus::OK);
   }
+  const int realInliers = static_cast<int>(p1.size());
 
-  // 10 outliers (random far-away positions)
-  for (int i = 0; i < 10; ++i)
+  // 10 outliers: random, inconsistent pixel pairs.
+  std::uniform_real_distribution<double> upx(0.0, 640.0);
+  std::uniform_real_distribution<double> upy(0.0, 480.0);
+  const int                              nOutliers = 10;
+  for (int i = 0; i < nOutliers; ++i)
   {
-    p1.push_back({static_cast<float>(i) * 0.1f, 0.f});
-    p2.push_back({0.f, static_cast<float>(i) * 0.1f});  // clearly wrong
+    p1.push_back({static_cast<float>(upx(rng)), static_cast<float>(upy(rng))});
+    p2.push_back({static_cast<float>(upx(rng)), static_cast<float>(upy(rng))});
     status.push_back(TrackStatus::OK);
   }
 
   FMatrixFilterParams params;
-  params.ransac_threshold = 3.f;
+  params.ransac_threshold = 2.f;  // pixels
   fundamentalMatrixFilter(p1, p2, status, params);
 
-  // Most inliers (first 40) should remain OK
   int inlier_ok = 0, outlier_rejected = 0;
-  for (int i = 0; i < 40; ++i)
-    if (status[i] == TrackStatus::OK) ++inlier_ok;
-  for (int i = 40; i < 50; ++i)
-    if (status[i] == TrackStatus::OUTLIER) ++outlier_rejected;
+  for (int i = 0; i < realInliers; ++i)
+  {
+    if (status[i] == TrackStatus::OK)
+    {
+      ++inlier_ok;
+    }
+  }
+  for (int i = realInliers; i < realInliers + nOutliers; ++i)
+  {
+    if (status[i] == TrackStatus::OUTLIER)
+    {
+      ++outlier_rejected;
+    }
+  }
 
-  EXPECT_GE(inlier_ok, 30) << "At least 30/40 true inliers should survive";
+  EXPECT_GE(inlier_ok, static_cast<int>(0.75 * realInliers))
+      << "At least 75% of true inliers should survive";
   EXPECT_GE(outlier_rejected, 5) << "At least 5/10 true outliers should be rejected";
 }
