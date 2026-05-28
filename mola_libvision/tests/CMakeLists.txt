@@ -59,3 +59,10 @@ mola_vision_add_test(test_lm_solver
 mola_vision_add_test(test_mappoint
   SOURCES test_mappoint.cpp
 )
+
+# ----------------------------------------------------------------------------
+# Test: PnP solver
+# ----------------------------------------------------------------------------
+mola_vision_add_test(test_pnp
+  SOURCES test_pnp.cpp
+)

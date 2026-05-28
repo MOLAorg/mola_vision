@@ -31,6 +31,7 @@ set(LIB_SRCS
   src/optical_flow.cpp
   src/geometry.cpp
   src/MapPoint.cpp
+  src/pnp_solver.cpp
   # lm_solver.h is header-only (template)
   # Keyframe.h  is header-only (POD struct)
   # ORB stub (kept until Phase 5):
@@ -45,6 +46,7 @@ set(LIB_PUBLIC_HDRS
   include/mola_libvision/MapPoint.h
   include/mola_libvision/Keyframe.h
   include/mola_libvision/lm_solver.h
+  include/mola_libvision/pnp_solver.h
 )
 
 mola_add_library(
