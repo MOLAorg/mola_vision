@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  * ------------------------------------------------------------------------- */
 #include <gtest/gtest.h>
+#include <mola_libvision/Keyframe.h>  // full Keyframe definition for shared_ptr use
 #include <mola_libvision/MapPoint.h>
 
 using namespace mola::vision;

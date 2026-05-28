@@ -6,6 +6,7 @@
 #include <mola_libvision/geometry.h>
 
 #include <Eigen/Core>
+#include <Eigen/LU>  // inverse(), determinant()
 #include <cmath>
 
 using namespace mola::vision;
@@ -100,10 +101,8 @@ TEST(Geometry, TriangulateSinglePoint)
 TEST(Geometry, UndistortPoints_NoDistortion)
 {
   mrpt::img::TCamera cam;
-  cam.fx() = 500.f;
-  cam.fy() = 500.f;
-  cam.cx() = 320.f;
-  cam.cy() = 240.f;
+  // MRPT 3.x: fx()/fy()/cx()/cy() are value getters; use the setter.
+  cam.setIntrinsicParamsFromValues(500.0, 500.0, 320.0, 240.0);
   // All distortion coefficients default to 0
 
   std::vector<mrpt::math::TPoint2Df> pixels = {

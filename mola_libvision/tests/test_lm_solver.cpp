@@ -24,7 +24,8 @@ TEST(LMSolver, LinearLeastSquares)
 
   Eigen::Vector2f x = Eigen::Vector2f::Zero();
 
-  auto cost_jac = [&](const Eigen::Vector2f& xv, Eigen::VectorXf& r, Eigen::MatrixXf& J)
+  auto cost_jac =
+      [&](const Eigen::Vector2f& xv, Eigen::VectorXf& r, Eigen::Matrix<float, Eigen::Dynamic, 2>& J)
   {
     r = A * xv - b;
     J = A.cast<float>();
@@ -52,7 +53,8 @@ TEST(LMSolver, Rosenbrock)
 {
   Eigen::Vector2f x(-1.2f, 1.f);  // standard starting point
 
-  auto cost_jac = [](const Eigen::Vector2f& xv, Eigen::VectorXf& r, Eigen::MatrixXf& J)
+  auto cost_jac =
+      [](const Eigen::Vector2f& xv, Eigen::VectorXf& r, Eigen::Matrix<float, Eigen::Dynamic, 2>& J)
   {
     r.resize(2);
     r(0) = 10.f * (xv(1) - xv(0) * xv(0));

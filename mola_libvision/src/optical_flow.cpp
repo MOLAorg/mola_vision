@@ -299,8 +299,13 @@ Eigen::Matrix3f estimateF8pt(
   }
 
   Eigen::JacobiSVD<Eigen::MatrixXf> svd(A, Eigen::ComputeFullV);
-  Eigen::Matrix3f                   Fraw;
-  Fraw << svd.matrixV().col(8).reshaped(3, 3);
+  // The null-space vector f is ordered row-major to match the constraint row
+  // [x1*x2, y1*x2, x2, x1*y2, y1*y2, y2, x1, y1, 1] = vec_row_major(F).
+  // Fill F explicitly row-major (Eigen's reshaped() defaults to column-major,
+  // which would yield Fᵀ).
+  const Eigen::Matrix<float, 9, 1> f = svd.matrixV().col(8);
+  Eigen::Matrix3f                  Fraw;
+  Fraw << f(0), f(1), f(2), f(3), f(4), f(5), f(6), f(7), f(8);
 
   // Enforce rank-2 constraint
   Eigen::JacobiSVD<Eigen::Matrix3f> svd2(Fraw, Eigen::ComputeFullU | Eigen::ComputeFullV);
