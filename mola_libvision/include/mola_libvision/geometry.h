@@ -21,13 +21,15 @@ namespace mola::vision
 
 /** Batch undistort + unproject: pixel → normalized (metric) image coordinates.
  *
- *  Wraps MRPT's per-point `mrpt::img::undistort_point()` for a batch of
- *  features, supporting pinhole (radial-tangential / plumb_bob) and
- *  Kannala-Brandt (fisheye) distortion models as encoded in TCamera.
- *
  *  Output: `undistorted[i]` = normalized plane coordinate (z=1), i.e.
  *    undistorted[i] = K⁻¹ · undistort(pixel[i])
  *  where undistort removes distortion and K⁻¹ de-projects to the unit plane.
+ *
+ *  \note Thin float facade over MRPT 3.x's batch
+ *        `mrpt::img::camera_geometry::undistort_points_to_unit_plane()`
+ *        (which returns double `TPoint2D`). Supports pinhole / plumb_bob and
+ *        Kannala-Brandt distortion as encoded in TCamera. The facade exists
+ *        because the SLAM pipeline carries features as `std::vector<TPoint2Df>`.
  */
 void undistortPoints(
     const std::vector<mrpt::math::TPoint2Df>& pixels, const mrpt::img::TCamera& camera,
