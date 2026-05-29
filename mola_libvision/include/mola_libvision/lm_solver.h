@@ -133,7 +133,10 @@ LMResult levenbergMarquardt(
     }
 
     // Damping: add λ to diagonal (Marquardt variant)
-    for (int i = 0; i < H.rows(); ++i) H(i, i) += lambda * H(i, i);
+    for (int i = 0; i < H.rows(); ++i)
+    {
+      H(i, i) += lambda * H(i, i);
+    }
 
     // Solve with LDLT
     Eigen::Matrix<float, D, 1> dx = H.template selfadjointView<Eigen::Upper>().ldlt().solve(b);
@@ -190,7 +193,9 @@ LMResult levenbergMarquardt(
   }
 
   if (!result.converged && result.iterations >= cfg.max_iters)
+  {
     result.reason = LMResult::Reason::MaxIters;
+  }
 
   result.final_cost = cost;
   return result;
