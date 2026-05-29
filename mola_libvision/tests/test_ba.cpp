@@ -1,6 +1,6 @@
 /* -------------------------------------------------------------------------
  * mola_libvision unit tests: sliding-window bundle adjustment
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: GPL-3.0-or-later
  * ------------------------------------------------------------------------- */
 #include <gtest/gtest.h>
 #include <mola_libvision/lie_utils.h>

@@ -1,7 +1,7 @@
 /* -------------------------------------------------------------------------
  * mola_libvision: reusable computer vision for MOLA SLAM
  * Copyright (C) 2026, Jose Luis Blanco-Claraco
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: GPL-3.0-or-later
  * ------------------------------------------------------------------------- */
 #include <mola_libvision/keyframe_database.h>
 

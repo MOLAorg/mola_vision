@@ -1,7 +1,7 @@
 /* -------------------------------------------------------------------------
  * mola_libvision: reusable computer vision for MOLA SLAM
  * Copyright (C) 2026, Jose Luis Blanco-Claraco
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * On-manifold IMU preintegration (Forster et al., T-RO 2017). Adapted from
  * lightweight_vio (MIT, (c) 2025 Seungwon Choi) IMUHandler.

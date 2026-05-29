@@ -12,7 +12,7 @@
   </description>
 
   <maintainer email="joseluisblancoc@gmail.com">Jose-Luis Blanco-Claraco</maintainer>
-  <license file="LICENSE">BSD-3-Clause</license>
+  <license file="LICENSE">GPL-3.0-or-later</license>
 
   <url type="website">https://github.com/MOLAorg/mola_vision</url>
 
