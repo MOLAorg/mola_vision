@@ -25,15 +25,6 @@ using Mat63 = Eigen::Matrix<double, 6, 3>;
 using Mat23 = Eigen::Matrix<double, 2, 3>;
 using Mat26 = Eigen::Matrix<double, 2, 6>;
 
-// Eigen fixed-size matrices >= 16 bytes are over-aligned; storing them in STL
-// containers requires Eigen::aligned_allocator to avoid undefined behavior
-// (heap corruption). Matrix3d / Vector3d are not over-aligned, so plain
-// std::vector is fine for those.
-template <typename T>
-using AlignedVector = std::vector<T, Eigen::aligned_allocator<T>>;
-using HplMap =
-    std::map<int, Mat63, std::less<int>, Eigen::aligned_allocator<std::pair<const int, Mat63>>>;
-
 struct Intr
 {
   double fx, fy, cx, cy;
@@ -145,12 +136,12 @@ BAResult mola::vision::slidingWindowBA(
     result.iterations = iter + 1;
 
     // --- Accumulate the sparse normal equations. ---
-    AlignedVector<Mat6>          Hpp(nFree, Mat6::Zero());
-    AlignedVector<Vec6>          bp(nFree, Vec6::Zero());
+    std::vector<Mat6>            Hpp(nFree, Mat6::Zero());
+    std::vector<Vec6>            bp(nFree, Vec6::Zero());
     std::vector<Eigen::Matrix3d> Hll(nLm, Eigen::Matrix3d::Zero());
     std::vector<Eigen::Vector3d> bl(nLm, Eigen::Vector3d::Zero());
     // Per-landmark off-diagonal blocks, keyed by free-pose column.
-    std::vector<HplMap> Hpl(nLm);
+    std::vector<std::map<int, Mat63>> Hpl(nLm);
     int                 n_used = 0;
 
     for (const auto& o : obs)
