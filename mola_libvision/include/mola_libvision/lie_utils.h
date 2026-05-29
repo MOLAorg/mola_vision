@@ -36,4 +36,21 @@ inline Eigen::Matrix3d so3Exp(const Eigen::Vector3d& w)
   return Eigen::Matrix3d::Identity() + std::sin(theta) * K + (1.0 - std::cos(theta)) * K * K;
 }
 
+/** Right Jacobian of SO(3) at rotation vector w:
+ *    Jr = I - (1-cos θ)/θ² [w]_x + (θ-sin θ)/θ³ [w]_x²,   θ = ‖w‖.
+ *  Satisfies Exp(w + δ) ≈ Exp(w) · Exp(Jr·δ). */
+inline Eigen::Matrix3d rightJacobianSO3(const Eigen::Vector3d& w)
+{
+  const double          theta2 = w.squaredNorm();
+  const Eigen::Matrix3d W      = skew(w);
+  if (theta2 < 1e-12)
+  {
+    return Eigen::Matrix3d::Identity() - 0.5 * W;
+  }
+  const double theta = std::sqrt(theta2);
+  const double a     = (1.0 - std::cos(theta)) / theta2;
+  const double b     = (theta - std::sin(theta)) / (theta2 * theta);
+  return Eigen::Matrix3d::Identity() - a * W + b * W * W;
+}
+
 }  // namespace mola::vision

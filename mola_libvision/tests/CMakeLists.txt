@@ -94,3 +94,10 @@ mola_vision_add_test(test_rgbd
 mola_vision_add_test(test_keyframe_db
   SOURCES test_keyframe_db.cpp
 )
+
+# ----------------------------------------------------------------------------
+# Test: IMU preintegration
+# ----------------------------------------------------------------------------
+mola_vision_add_test(test_imu
+  SOURCES test_imu.cpp
+)

@@ -36,6 +36,7 @@ set(LIB_SRCS
   src/sliding_window_ba.cpp
   src/rgbd_depth.cpp
   src/keyframe_database.cpp
+  src/imu_preintegration.cpp
   # keyframe_selector.h is header-only (policy)
   # lm_solver.h is header-only (template)
   # Keyframe.h  is header-only (POD struct)
@@ -58,6 +59,7 @@ set(LIB_PUBLIC_HDRS
   include/mola_libvision/rgbd_depth.h
   include/mola_libvision/keyframe_database.h
   include/mola_libvision/keyframe_selector.h
+  include/mola_libvision/imu_preintegration.h
 )
 
 mola_add_library(
