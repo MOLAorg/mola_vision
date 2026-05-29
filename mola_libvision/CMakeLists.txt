@@ -38,6 +38,7 @@ set(LIB_SRCS
   src/keyframe_database.cpp
   src/imu_preintegration.cpp
   src/gravity_estimator.cpp
+  src/marg_prior.cpp
   # keyframe_selector.h is header-only (policy)
   # lm_solver.h is header-only (template)
   # Keyframe.h  is header-only (POD struct)
@@ -64,6 +65,7 @@ set(LIB_PUBLIC_HDRS
   include/mola_libvision/gravity_estimator.h
   include/mola_libvision/loop_detector.h
   include/mola_libvision/pose_graph_optimizer.h
+  include/mola_libvision/marg_prior.h
 )
 
 mola_add_library(

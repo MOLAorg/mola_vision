@@ -108,3 +108,10 @@ mola_vision_add_test(test_imu
 mola_vision_add_test(test_gravity_and_interfaces
   SOURCES test_gravity_and_interfaces.cpp
 )
+
+# ----------------------------------------------------------------------------
+# Test: marginalization prior (Schur complement)
+# ----------------------------------------------------------------------------
+mola_vision_add_test(test_marg_prior
+  SOURCES test_marg_prior.cpp
+)
