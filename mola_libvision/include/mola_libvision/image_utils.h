@@ -74,15 +74,25 @@ inline EigenGrayMap asEigenMap(mrpt::img::CImage& img)
  *
  *  Complexity: O(W*H) with constant factor ≈ 8 muls + 6 adds per pixel
  *  (two separable passes of 3-tap filters).
+ *
+ *  \note MRPT 3.x has no equivalent public API: CImage offers Gaussian/median
+ *        filtering and a single-point Shi-Tomasi score (KLT_response()), but no
+ *        whole-image float gradient maps. This function provides the Ix/Iy
+ *        needed to build the structure tensor in goodFeaturesToTrack().
  */
 void sobelGradients(const mrpt::img::CImage& img, Eigen::MatrixXf& Ix, Eigen::MatrixXf& Iy);
 
-/** Separable Gaussian blur on a grayscale CImage.
+/** Separable Gaussian blur on a grayscale CImage, parameterized by sigma.
  *
- *  Kernel size is automatically chosen as 2*ceil(2*sigma)+1 (capped at 31).
+ *  Kernel size is automatically chosen as 2*ceil(2*sigma)+1.
  *  Output is a new CH_GRAY CImage of the same size.
- *  Border pixels are handled by clamping (reflect-101 is not done for
- *  simplicity — clamp is sufficient for our use cases).
+ *  Border pixels are handled by clamping (replicate).
+ *
+ *  \note This overlaps `mrpt::img::CImage::filterGaussian(out, W, H, sigma)`,
+ *        which takes an explicit window size. This `mola::vision` facade exists
+ *        to (a) derive the kernel size from sigma automatically and (b)
+ *        guarantee the replicate-border behavior the corner-detection pipeline
+ *        depends on. Prefer `CImage::filterGaussian` directly for general use.
  */
 void gaussianBlur(const mrpt::img::CImage& in, mrpt::img::CImage& out, float sigma);
 
