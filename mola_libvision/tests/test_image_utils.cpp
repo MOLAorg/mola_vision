@@ -1,6 +1,6 @@
 /* -------------------------------------------------------------------------
  * mola_libvision unit tests: image_utils (Sobel, Gaussian blur, Eigen::Map)
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: GPL-3.0-or-later
  * ------------------------------------------------------------------------- */
 #include <gtest/gtest.h>
 #include <mola_libvision/image_utils.h>

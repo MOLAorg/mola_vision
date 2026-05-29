@@ -1,7 +1,7 @@
 /* -------------------------------------------------------------------------
  * mola_libvision: reusable computer vision for MOLA SLAM
  * Copyright (C) 2026, Jose Luis Blanco-Claraco
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Pyramidal Lucas-Kanade optical flow and fundamental matrix RANSAC filter.
  * Adapted from: lightweight_vio (MIT License) and Bouguet 2001.

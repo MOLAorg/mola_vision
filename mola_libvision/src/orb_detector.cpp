@@ -1,9 +1,11 @@
-// -----------------------------------------------------------------------------
-//   A Modular Optimization framework for Localization and mApping  (MOLA)
-//
-// Copyright (C) 2018-2025 Jose Luis Blanco, University of Almeria
-// Licensed under the BSD-3-Clause License.
-// -----------------------------------------------------------------------------
+/* -------------------------------------------------------------------------
+ * mola_libvision: reusable computer vision for MOLA SLAM
+ * Copyright (C) 2026, Jose Luis Blanco-Claraco
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Note: the bundled ORB descriptor bit-pattern table in orb_point_pairs.h is
+ * from OpenCV (BSD-3-Clause) and retains its original license notice.
+ * ------------------------------------------------------------------------- */
 
 // This module:
 #include "./orb_point_pairs.h"

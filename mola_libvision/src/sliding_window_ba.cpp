@@ -1,7 +1,7 @@
 /* -------------------------------------------------------------------------
  * mola_libvision: reusable computer vision for MOLA SLAM
  * Copyright (C) 2026, Jose Luis Blanco-Claraco
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Schur-complement structure inspired by Basalt (BSD-3-Clause,
  * (c) 2019 Usenko, Demmel), linearization_abs_sc. Reprojection residual and
