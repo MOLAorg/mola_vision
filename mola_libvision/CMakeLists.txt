@@ -33,6 +33,7 @@ set(LIB_SRCS
   src/MapPoint.cpp
   src/pnp_solver.cpp
   src/stereo_matcher.cpp
+  src/sliding_window_ba.cpp
   # lm_solver.h is header-only (template)
   # Keyframe.h  is header-only (POD struct)
   # ORB stub (kept until Phase 5):
@@ -49,6 +50,8 @@ set(LIB_PUBLIC_HDRS
   include/mola_libvision/lm_solver.h
   include/mola_libvision/pnp_solver.h
   include/mola_libvision/stereo_matcher.h
+  include/mola_libvision/sliding_window_ba.h
+  include/mola_libvision/lie_utils.h
 )
 
 mola_add_library(
