@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>mola_visual_tracking</name>
+  <version>0.1.0</version>
+  <description>
+    A MOLA demo front-end that detects and tracks image features (using
+    mola_libvision) and shows them in a MolaViz subwindow. No 3D
+    reconstruction: it only exercises and visualizes feature detection and
+    optical-flow tracking.
+  </description>
+
+  <maintainer email="joseluisblancoc@gmail.com">Jose-Luis Blanco-Claraco</maintainer>
+  <license file="LICENSE">GPL-3.0-or-later</license>
+
+  <url type="website">https://github.com/MOLAorg/mola_vision</url>
+
+  <depend>mola_common</depend>
+  <depend>mola_kernel</depend>
+  <depend>mola_libvision</depend>
+  <depend>mrpt_obs</depend>
+  <depend>mrpt_img</depend>
+
+  <!-- Runtime modules used by the demo launch files -->
+  <exec_depend>mola_viz</exec_depend>
+  <exec_depend>mola_input_video</exec_depend>
+  <exec_depend>mola_launcher</exec_depend>
+
+  <doc_depend>doxygen</doc_depend>
+  <build_depend>ros_environment</build_depend>
+  <buildtool_depend>cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
