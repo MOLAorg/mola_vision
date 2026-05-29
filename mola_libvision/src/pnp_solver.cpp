@@ -6,6 +6,7 @@
  * Adapted in spirit from lightweight_vio (MIT, (c) 2025 Seungwon Choi);
  * re-derived for MRPT types without Ceres.
  * ------------------------------------------------------------------------- */
+#include <mola_libvision/lie_utils.h>  // skew(), so3Exp()
 #include <mola_libvision/lm_solver.h>  // huberWeight()
 #include <mola_libvision/pnp_solver.h>
 
@@ -13,35 +14,6 @@
 #include <cmath>
 
 using namespace mola::vision;
-
-namespace
-{
-/** Skew-symmetric matrix [v]_x such that [v]_x * w = v x w. */
-Eigen::Matrix3d skew(const Eigen::Vector3d& v)
-{
-  Eigen::Matrix3d S;
-  // clang-format off
-  S <<      0, -v.z(),  v.y(),
-        v.z(),      0, -v.x(),
-       -v.y(),  v.x(),      0;
-  // clang-format on
-  return S;
-}
-
-/** SO(3) exponential map (Rodrigues) of a small rotation vector. */
-Eigen::Matrix3d so3Exp(const Eigen::Vector3d& w)
-{
-  const double theta = w.norm();
-  if (theta < 1e-10)
-  {
-    return Eigen::Matrix3d::Identity() + skew(w);
-  }
-  const Eigen::Vector3d axis = w / theta;
-  const Eigen::Matrix3d K    = skew(axis);
-  return Eigen::Matrix3d::Identity() + std::sin(theta) * K + (1.0 - std::cos(theta)) * K * K;
-}
-
-}  // namespace
 
 PnPResult mola::vision::solvePnP(
     const std::vector<mrpt::math::TPoint3Df>& worldPts,

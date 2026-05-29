@@ -73,3 +73,10 @@ mola_vision_add_test(test_pnp
 mola_vision_add_test(test_stereo
   SOURCES test_stereo.cpp
 )
+
+# ----------------------------------------------------------------------------
+# Test: sliding-window bundle adjustment
+# ----------------------------------------------------------------------------
+mola_vision_add_test(test_ba
+  SOURCES test_ba.cpp
+)
