@@ -66,3 +66,10 @@ mola_vision_add_test(test_mappoint
 mola_vision_add_test(test_pnp
   SOURCES test_pnp.cpp
 )
+
+# ----------------------------------------------------------------------------
+# Test: stereo matcher
+# ----------------------------------------------------------------------------
+mola_vision_add_test(test_stereo
+  SOURCES test_stereo.cpp
+)
