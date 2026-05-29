@@ -34,6 +34,9 @@ set(LIB_SRCS
   src/pnp_solver.cpp
   src/stereo_matcher.cpp
   src/sliding_window_ba.cpp
+  src/rgbd_depth.cpp
+  src/keyframe_database.cpp
+  # keyframe_selector.h is header-only (policy)
   # lm_solver.h is header-only (template)
   # Keyframe.h  is header-only (POD struct)
   # ORB stub (kept until Phase 5):
@@ -52,6 +55,9 @@ set(LIB_PUBLIC_HDRS
   include/mola_libvision/stereo_matcher.h
   include/mola_libvision/sliding_window_ba.h
   include/mola_libvision/lie_utils.h
+  include/mola_libvision/rgbd_depth.h
+  include/mola_libvision/keyframe_database.h
+  include/mola_libvision/keyframe_selector.h
 )
 
 mola_add_library(

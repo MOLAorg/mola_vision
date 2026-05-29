@@ -80,3 +80,17 @@ mola_vision_add_test(test_stereo
 mola_vision_add_test(test_ba
   SOURCES test_ba.cpp
 )
+
+# ----------------------------------------------------------------------------
+# Test: RGBD depth processing
+# ----------------------------------------------------------------------------
+mola_vision_add_test(test_rgbd
+  SOURCES test_rgbd.cpp
+)
+
+# ----------------------------------------------------------------------------
+# Test: keyframe database (covisibility) + keyframe selector
+# ----------------------------------------------------------------------------
+mola_vision_add_test(test_keyframe_db
+  SOURCES test_keyframe_db.cpp
+)
