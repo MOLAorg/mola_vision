@@ -110,7 +110,10 @@ BAResult mola::vision::slidingWindowBA(
       poseCol[i] = nFree++;
     }
   }
-  const int dimP = 6 * nFree;
+  // Eigen-typed block size, so index arithmetic (kB * col) is done in
+  // Eigen::Index and not int (avoids implicit-widening warnings / overflow).
+  constexpr Eigen::Index kB   = 6;
+  const Eigen::Index     dimP = kB * nFree;
 
   // Working state in Eigen.
   std::vector<Eigen::Matrix3d> Rs(nPoses);
@@ -142,7 +145,7 @@ BAResult mola::vision::slidingWindowBA(
     std::vector<Eigen::Vector3d> bl(nLm, Eigen::Vector3d::Zero());
     // Per-landmark off-diagonal blocks, keyed by free-pose column.
     std::vector<std::map<int, Mat63>> Hpl(nLm);
-    int                 n_used = 0;
+    int                               n_used = 0;
 
     for (const auto& o : obs)
     {
@@ -201,8 +204,8 @@ BAResult mola::vision::slidingWindowBA(
         // exactly (D = diag), which keeps the gain ratio well-calibrated.
         Hd(d, d) += lambda * Hd(d, d);
       }
-      S.block<6, 6>(6 * c, 6 * c) = Hd;
-      g.segment<6>(6 * c)         = bp[c];
+      S.block<6, 6>(kB * c, kB * c) = Hd;
+      g.segment<6>(kB * c)          = bp[c];
     }
 
     std::vector<Eigen::Matrix3d> HllInv(nLm, Eigen::Matrix3d::Zero());
@@ -224,10 +227,10 @@ BAResult mola::vision::slidingWindowBA(
       for (const auto& [cp, Wp] : Hpl[l])
       {
         const Eigen::Matrix<double, 6, 3> WpHinv = Wp * HllInv[l];
-        g.segment<6>(6 * cp) -= WpHinv * bl[l];
+        g.segment<6>(kB * cp) -= WpHinv * bl[l];
         for (const auto& [cq, Wq] : Hpl[l])
         {
-          S.block<6, 6>(6 * cp, 6 * cq) -= WpHinv * Wq.transpose();
+          S.block<6, 6>(kB * cp, kB * cq) -= WpHinv * Wq.transpose();
         }
       }
     }
@@ -254,7 +257,7 @@ BAResult mola::vision::slidingWindowBA(
       Eigen::Vector3d acc = bl[l];
       for (const auto& [cp, Wp] : Hpl[l])
       {
-        acc += Wp.transpose() * dxp.segment<6>(6 * cp);
+        acc += Wp.transpose() * dxp.segment<6>(kB * cp);
       }
       dxl[l] = -HllInv[l] * acc;
     }
@@ -269,7 +272,7 @@ BAResult mola::vision::slidingWindowBA(
       {
         continue;
       }
-      const Vec6 d = dxp.segment<6>(6 * poseCol[i]);
+      const Vec6 d = dxp.segment<6>(kB * poseCol[i]);
       Rs_new[i]    = Rs[i] * so3Exp(d.head<3>());
       ts_new[i]    = ts[i] + d.tail<3>();
     }
@@ -294,7 +297,7 @@ BAResult mola::vision::slidingWindowBA(
     double dDd = 0.0;  // dx^T D dx
     for (int c = 0; c < nFree; ++c)
     {
-      const Vec6 d = dxp.segment<6>(6 * c);
+      const Vec6 d = dxp.segment<6>(kB * c);
       gdx += bp[c].dot(d);
       for (int k = 0; k < 6; ++k)
       {
