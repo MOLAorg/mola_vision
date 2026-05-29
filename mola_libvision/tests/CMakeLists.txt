@@ -101,3 +101,10 @@ mola_vision_add_test(test_keyframe_db
 mola_vision_add_test(test_imu
   SOURCES test_imu.cpp
 )
+
+# ----------------------------------------------------------------------------
+# Test: gravity estimator + place-recognition / pose-graph interfaces
+# ----------------------------------------------------------------------------
+mola_vision_add_test(test_gravity_and_interfaces
+  SOURCES test_gravity_and_interfaces.cpp
+)
