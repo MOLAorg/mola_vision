@@ -11,11 +11,14 @@
 #include <mola_libvision/sliding_window_ba.h>
 #include <mola_rgbd_slam/RgbdSlam.h>
 #include <mrpt/containers/yaml.h>
+#include <mrpt/img/TColor.h>
 #include <mrpt/maps/CSimplePointsMap.h>
 #include <mrpt/obs/CObservation3DRangeScan.h>
+#include <mrpt/obs/CObservationImage.h>
 
 #include <algorithm>
 #include <cmath>
+#include <sstream>
 
 using namespace mola;
 
@@ -77,6 +80,18 @@ void RgbdSlam::initialize_frontend(const Yaml& c)
     getI("kf_min_tracked", kf_min_tracked_);
     getF("kf_min_tracked_ratio", kf_min_tracked_ratio_);
     getF("kf_min_parallax_px", kf_min_parallax_px_);
+    if (cfg.has("publish_viz_2d"))
+    {
+      publish_viz_2d_ = cfg["publish_viz_2d"].as<bool>();
+    }
+    if (cfg.has("viz2d_title"))
+    {
+      viz2d_title_ = cfg["viz2d_title"].as<std::string>();
+    }
+    if (cfg.has("viz2d_win_pos"))
+    {
+      viz2d_win_pos_ = cfg["viz2d_win_pos"].as<std::string>();
+    }
   }
 
   MRPT_LOG_INFO_STREAM(
@@ -193,6 +208,7 @@ mrpt::poses::CPose3D RgbdSlam::processFrame(
     frames_since_kf_ = 0;
     publishLocalization(timestamp);
     publishMap(timestamp);
+    publishViz2D(gray, true);
     return pose_wc_;
   }
 
@@ -347,6 +363,7 @@ mrpt::poses::CPose3D RgbdSlam::processFrame(
 
   prev_gray_ = gray;
   publishLocalization(timestamp);
+  publishViz2D(gray, false);
   return pose_wc_;
 }
 
@@ -451,6 +468,66 @@ void RgbdSlam::publishLocalization(const mrpt::Clock::time_point& timestamp)
   lu.child_frame     = "base_link";
   lu.pose            = pose_wc_.asTPose();
   advertiseUpdatedLocalization(lu);
+}
+
+void RgbdSlam::publishViz2D(const mrpt::img::CImage& gray, bool just_initialized)
+{
+  if (!publish_viz_2d_ || !visualizer_)
+  {
+    return;
+  }
+
+  using mrpt::img::TColor;
+
+  // Color base image so we can draw colored overlays.
+  mrpt::img::CImage img = gray.colorImage();
+
+  const TColor colTrack(0, 220, 0);  // tracked feature (treated as inlier)
+  const TColor colNew(40, 160, 255);  // freshly initialized features
+  const TColor col = just_initialized ? colNew : colTrack;
+
+  for (const auto& p : track_pts_)
+  {
+    img.drawCircle({static_cast<int>(p.x), static_cast<int>(p.y)}, 3, col, 1);
+  }
+
+  std::ostringstream txt;
+  txt << "frame " << frame_count_ << "  tracked: " << track_pts_.size()
+      << "  landmarks: " << landmarks_.size() << "  kfs: " << keyframes_.size();
+  img.textOut({8, 8}, txt.str(), TColor(255, 255, 255));
+
+  // Wrap into a CObservationImage so the built-in MolaViz image handler shows it.
+  auto annotated         = mrpt::obs::CObservationImage::Create();
+  annotated->sensorLabel = viz2d_title_;
+  annotated->image       = std::move(img);
+
+  if (!gui_created_)
+  {
+    mola::gui::WindowDescription desc;
+    desc.title = viz2d_title_;
+    if (!viz2d_win_pos_.empty())
+    {
+      std::string cleaned = viz2d_win_pos_;
+      for (char& ch : cleaned)
+      {
+        if (ch == '[' || ch == ']' || ch == ',')
+        {
+          ch = ' ';
+        }
+      }
+      int                x = 0, y = 0, w = 0, h = 0;
+      std::istringstream ss(cleaned);
+      if ((ss >> x) && (ss >> y) && (ss >> w) && (ss >> h) && w > 0 && h > 0)
+      {
+        desc.position = {x, y};
+        desc.size     = {w, h};
+      }
+    }
+    visualizer_->create_subwindow_from_description(desc).get();
+    gui_created_ = true;
+  }
+
+  visualizer_->subwindow_update_visualization(annotated, viz2d_title_);
 }
 
 void RgbdSlam::publishMap(const mrpt::Clock::time_point& timestamp)
