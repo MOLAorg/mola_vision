@@ -47,6 +47,13 @@ mola_vision_add_test(test_geometry
 )
 
 # ----------------------------------------------------------------------------
+# Test: essential-matrix RANSAC estimator (two-view init)
+# ----------------------------------------------------------------------------
+mola_vision_add_test(test_essential_ransac
+  SOURCES test_essential_ransac.cpp
+)
+
+# ----------------------------------------------------------------------------
 # Test: LM solver
 # ----------------------------------------------------------------------------
 mola_vision_add_test(test_lm_solver
