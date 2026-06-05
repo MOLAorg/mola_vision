@@ -12,15 +12,23 @@ Packages:
   sliding-window BA over keyframes; publishes pose + sparse map.
 
 ## Build & test (ROS-agnostic; build_type cmake)
-This package needs `mola_common` + MRPT 3.x on the prefix path. MRPT 2.x is the
-default in the ROS workspace, so source the MRPT 3 colcon workspace first:
+This package needs `mola_common` + the MRPT-3.x `mola_kernel`/`mola_viz` +
+MRPT 3.x on the prefix path. ROS jazzy bundles MRPT 2.x, and the MRPT-3.x colcon
+install is isolated (its setup re-chains ROS ahead of itself), so MRPT 2.x wins
+`find_package` unless you hoist the 3.x prefixes to the front:
 ```bash
-source ~/code/mrpt/install/setup.bash
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash      # mola_common + MRPT-3.x mola_kernel/mola_viz
+source ~/code/mrpt/install/setup.bash    # MRPT 3.x (source last)
+export CMAKE_PREFIX_PATH="$(ls -d ~/code/mrpt/install/*/ | tr '\n' ':')${CMAKE_PREFIX_PATH}"
 cd ~/ros2_ws/src/mola_vision
 colcon build  --packages-select mola_libvision --event-handlers console_direct+
 colcon test   --packages-select mola_libvision
 colcon test-result --all
 ```
+Do NOT source `~/ros2_cadtech_ws` (old MRPT-2.x `mola_kernel`, whose
+`VizInterface` uses `mrpt::opengl` instead of `mrpt::viz`). The repo root carries
+a `COLCON_IGNORE` marker; build a single package with `--base-paths .`.
 
 ## Coding standard (MANDATORY before every commit)
 1. **clang-format**: run `clang-format-14 -i` on every changed `.h`/`.cpp`

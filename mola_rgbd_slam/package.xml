@@ -22,6 +22,7 @@
   <depend>mrpt_obs</depend>
   <depend>mrpt_img</depend>
   <depend>mrpt_maps</depend>
+  <depend>mrpt_viz</depend>
 
   <!-- Runtime modules used by the demo launch files -->
   <exec_depend>mola_viz</exec_depend>

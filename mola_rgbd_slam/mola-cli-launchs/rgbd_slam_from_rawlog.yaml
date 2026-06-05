@@ -57,3 +57,5 @@ modules:
       publish_viz_2d: true
       viz2d_title: RGB-D SLAM tracking
       viz2d_win_pos: 10 60 800 600 # [x y width height]
+      # 3D scene (sparse points, trajectory, keyframe frustums) in the main viewport:
+      publish_viz_3d: true

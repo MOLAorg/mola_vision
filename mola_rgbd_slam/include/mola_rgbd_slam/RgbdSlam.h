@@ -117,6 +117,7 @@ class RgbdSlam : public mola::FrontEndBase,
   bool        publish_viz_2d_       = true;  ///< push a 2D feature-overlay subwindow to MolaViz
   std::string viz2d_title_          = "RGB-D SLAM tracking";
   std::string viz2d_win_pos_;  ///< "x y width height" (optional)
+  bool        publish_viz_3d_ = true;  ///< push a 3D scene (points, trajectory, frustum) to MolaViz
 
   // ---- landmark map (world frame) ----
   struct Landmark
@@ -142,6 +143,7 @@ class RgbdSlam : public mola::FrontEndBase,
   std::vector<int>                   track_lm_;  ///< landmark index of each tracked feature
   mrpt::poses::CPose3D               pose_cw_;  ///< current world -> camera
   mrpt::poses::CPose3D               pose_wc_;  ///< current camera -> world (published)
+  std::vector<mrpt::math::TPoint3D>  trajectory_;  ///< camera-center history (world frame)
   mrpt::img::TCamera                 camera_;
   int                                frame_count_     = 0;
   int                                frames_since_kf_ = 0;
@@ -152,6 +154,7 @@ class RgbdSlam : public mola::FrontEndBase,
   void publishLocalization(const mrpt::Clock::time_point& timestamp);
   void publishMap(const mrpt::Clock::time_point& timestamp);
   void publishViz2D(const mrpt::img::CImage& gray, bool just_initialized);
+  void publishViz3D();
   void runWindowedBA();
 };
 
