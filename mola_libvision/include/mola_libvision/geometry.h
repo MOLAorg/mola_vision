@@ -94,4 +94,59 @@ bool decomposeEssentialMatrix(
     const std::vector<mrpt::math::TPoint2Df>& pts2_norm, Eigen::Matrix3f& R_out,
     Eigen::Vector3f& t_out);
 
+/** Parameters for estimateEssentialRANSAC(). */
+struct EssentialRANSACParams
+{
+  /** Maximum RANSAC iterations (an adaptive Bernoulli cap is also applied). */
+  int max_iters = 500;
+
+  /** Desired probability of sampling an all-inlier minimal set. */
+  float confidence = 0.999f;
+
+  /** Inlier gate: Sampson distance threshold, expressed on the **normalized**
+   *  (z=1) image plane. For pixel-space error `e_px`, a rough mapping is
+   *  `threshold ~= (e_px / focal_length)`. Default ~0.006 corresponds to about
+   *  ~3 px at f=500. */
+  float threshold = 0.006f;
+
+  /** RNG seed (deterministic output for a given input + seed). */
+  unsigned seed = 42;
+};
+
+/** Result of estimateEssentialRANSAC(). */
+struct EssentialRANSACResult
+{
+  /** Recovered essential matrix (singular values forced to {1,1,0}). */
+  Eigen::Matrix3f E = Eigen::Matrix3f::Zero();
+
+  /** Per-correspondence inlier flag (same size as the inputs). */
+  std::vector<bool> inliers;
+
+  int  num_inliers = 0;
+  bool success     = false;  ///< false if too few correspondences / no consensus
+};
+
+/** Robustly estimate the essential matrix from two-view correspondences given
+ *  in **normalized** (undistorted, z=1) image coordinates, via the normalized
+ *  8-point algorithm inside RANSAC with a Sampson-distance inlier gate, then a
+ *  final refit over all inliers. The result is projected onto the essential
+ *  manifold (singular values {1,1,0}).
+ *
+ *  Because the inputs are already normalized (K^-1 applied, see
+ *  undistortPoints()), the fundamental matrix of these points equals the
+ *  essential matrix, so no K is needed here. Feed E to
+ *  decomposeEssentialMatrix() to recover the relative pose (R, t).
+ *
+ *  \param pts1_norm  Normalized image points in view 1.
+ *  \param pts2_norm  Matching normalized image points in view 2 (same size).
+ *  \param params     RANSAC options.
+ *
+ *  \note 8-point + Hartley normalization + Sampson gating follow Hartley &
+ *        Zisserman; the implementation mirrors fundamentalMatrixFilter() but
+ *        returns the matrix and enforces the essential constraints.
+ */
+EssentialRANSACResult estimateEssentialRANSAC(
+    const std::vector<mrpt::math::TPoint2Df>& pts1_norm,
+    const std::vector<mrpt::math::TPoint2Df>& pts2_norm, const EssentialRANSACParams& params = {});
+
 }  // namespace mola::vision
