@@ -21,7 +21,7 @@ project(mola_basalt_vio LANGUAGES C CXX)
 find_package(mola_common REQUIRED)
 
 # find dependencies:
-#find_package(mrpt-tclap REQUIRED)
+#find_package(mrpt_tclap REQUIRED)
 find_mola_package(mola_kernel)
 
 # -----------------------------------------------------------

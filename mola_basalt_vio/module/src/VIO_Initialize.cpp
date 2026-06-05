@@ -102,10 +102,10 @@ void VisualInertialOdometry::initialize_frontend(const Yaml& c)
   ENSURE_YAML_ENTRY_EXISTS(cfg, "camera_sensor_labels");
   if (cfg["camera_sensor_labels"].isSequence())
   {
-    const auto lsl = cfg["camera_sensor_labels"].asSequenceRange();
-    for (const auto& sl : lsl)
+    const mrpt::containers::yaml lslYml = cfg["camera_sensor_labels"];
+    for (size_t _i = 0; _i < lslYml.asSequence().size(); _i++)
     {
-      const auto s = sl.as<std::string>();
+      const auto s = lslYml[static_cast<int>(_i)].as<std::string>();
       MRPT_LOG_DEBUG_STREAM("Adding as input lidar sensor label: " << s);
       params_.camera_sensor_labels.emplace_back(s);
     }

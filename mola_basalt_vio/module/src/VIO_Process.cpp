@@ -35,6 +35,8 @@
 #include <mrpt/obs/CObservationImage.h>
 
 // OpenCV: (required for now... should be replaced)
+#include <mrpt/img/CImage_opencv.h>
+
 #include <opencv2/core.hpp>
 
 namespace
@@ -196,7 +198,7 @@ void VisualInertialOdometry::processImageSet(
 
     for (const auto& cam_obs : obs_list)
     {
-      img_data->img_data.push_back(cv_to_basalt_image(cam_obs->image.asCvMatRef()));
+      img_data->img_data.push_back(cv_to_basalt_image(mrpt::img::toOpenCVMat(cam_obs->image)));
     }
 
     state_.opt_flow_ptr->input_queue.push(img_data);

@@ -37,8 +37,8 @@
 // MRPT
 #include <mrpt/core/WorkerThreadsPool.h>
 #include <mrpt/obs/obs_frwds.h>
-#include <mrpt/opengl/CSetOfLines.h>
-#include <mrpt/opengl/CSetOfObjects.h>
+#include <mrpt/viz/CSetOfLines.h>
+#include <mrpt/viz/CSetOfObjects.h>
 #include <mrpt/poses/CPose3DInterpolator.h>
 #include <mrpt/poses/CPose3DPDFGaussian.h>
 
@@ -273,8 +273,8 @@ class VisualInertialOdometry : public mola::FrontEndBase, public mola::Localizat
     std::size_t drop_frames_stats_next_index = 0;
 
     // Visualization:
-    mrpt::opengl::CSetOfObjects::Ptr glVehicleFrame, glPathGrp;
-    mrpt::opengl::CSetOfLines::Ptr   glEstimatedPath;
+    mrpt::viz::CSetOfObjects::Ptr glVehicleFrame, glPathGrp;
+    mrpt::viz::CSetOfLines::Ptr   glEstimatedPath;
     int                              mapUpdateCnt = std::numeric_limits<int>::max();
 
   };  // end of MethodState

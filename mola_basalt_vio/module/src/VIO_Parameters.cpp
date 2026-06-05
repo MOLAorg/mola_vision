@@ -51,14 +51,14 @@ void VisualInertialOdometry::Parameters::Visualization::initialize(const Yaml& c
   if (cfg.has("model"))
   {
     ASSERT_(cfg["model"].isSequence());
-    const auto models = cfg["model"].asSequenceRange();
-    for (const auto& e : models)
+    const mrpt::containers::yaml modelsYml = cfg["model"];
+    for (size_t _i = 0; _i < modelsYml.asSequence().size(); _i++)
     {
+      const mrpt::containers::yaml e = modelsYml[static_cast<int>(_i)];
       ASSERT_(e.isMap());
-      auto  c = e.asMap();
       auto& m = model.emplace_back();
-      ASSERT_(c.count("file") != 0);
-      m.file = c["file"].as<std::string>();
+      ASSERT_(e.has("file"));
+      m.file = e["file"].as<std::string>();
 
       if (m.file.empty())
       {
@@ -66,33 +66,33 @@ void VisualInertialOdometry::Parameters::Visualization::initialize(const Yaml& c
         continue;
       }
 
-      if (c.count("tf.x"))
+      if (e.has("tf.x"))
       {
-        m.tf.x = c["tf.x"].as<float>();
+        m.tf.x = e["tf.x"].as<float>();
       }
-      if (c.count("tf.y"))
+      if (e.has("tf.y"))
       {
-        m.tf.y = c["tf.y"].as<float>();
+        m.tf.y = e["tf.y"].as<float>();
       }
-      if (c.count("tf.z"))
+      if (e.has("tf.z"))
       {
-        m.tf.z = c["tf.z"].as<float>();
+        m.tf.z = e["tf.z"].as<float>();
       }
-      if (c.count("tf.yaw"))
+      if (e.has("tf.yaw"))
       {
-        m.tf.yaw = mrpt::DEG2RAD(c["tf.yaw"].as<float>());
+        m.tf.yaw = mrpt::DEG2RAD(e["tf.yaw"].as<float>());
       }
-      if (c.count("tf.pitch"))
+      if (e.has("tf.pitch"))
       {
-        m.tf.pitch = mrpt::DEG2RAD(c["tf.pitch"].as<float>());
+        m.tf.pitch = mrpt::DEG2RAD(e["tf.pitch"].as<float>());
       }
-      if (c.count("tf.roll"))
+      if (e.has("tf.roll"))
       {
-        m.tf.roll = mrpt::DEG2RAD(c["tf.roll"].as<float>());
+        m.tf.roll = mrpt::DEG2RAD(e["tf.roll"].as<float>());
       }
-      if (c.count("scale"))
+      if (e.has("scale"))
       {
-        m.scale = c["scale"].as<float>();
+        m.scale = e["scale"].as<float>();
       }
     }
   }
