@@ -172,8 +172,12 @@ mrpt::poses::CPose3D RgbdSlam::processFrame(
   using mrpt::math::TPoint2Df;
   using mrpt::math::TPoint3Df;
 
-  camera_                      = cam;
+  mrpt::system::CTimeLoggerEntry tle(profiler_, "processFrame");
+
+  camera_ = cam;
+  profiler_.enter("grayscale");
   const mrpt::img::CImage gray = gray_in.grayscale();
+  profiler_.leave("grayscale");
 
   mola::vision::RGBDParams depthParams;
   depthParams.min_depth = min_depth_;
@@ -232,7 +236,9 @@ mrpt::poses::CPose3D RgbdSlam::processFrame(
   mola::vision::LKParams                 lk;
   lk.win_size   = lk_win_size_;
   lk.max_levels = lk_max_levels_;
+  profiler_.enter("track.LK");
   mola::vision::calcOpticalFlowPyrLK(prev_gray_, gray, track_pts_, next_pts, status, lk);
+  profiler_.leave("track.LK");
 
   // Gather 3D-2D correspondences with known landmarks for PnP.
   std::vector<TPoint3Df> worldPts;
@@ -265,8 +271,9 @@ mrpt::poses::CPose3D RgbdSlam::processFrame(
   std::vector<bool> pnp_outlier(next_pts.size(), false);
   if (static_cast<int>(worldPts.size()) >= min_pnp_points_)
   {
-    mola::vision::PnPParams pp;
-    const auto              res = mola::vision::solvePnP(worldPts, pixels, cam, pose_cw_, pp);
+    mrpt::system::CTimeLoggerEntry tlp(profiler_, "track.PnP");
+    mola::vision::PnPParams        pp;
+    const auto res = mola::vision::solvePnP(worldPts, pixels, cam, pose_cw_, pp);
     if (res.converged)
     {
       pose_cw_ = res.pose;
@@ -318,6 +325,7 @@ mrpt::poses::CPose3D RgbdSlam::processFrame(
   // -----------------------------------------------------------------------
   if (static_cast<int>(track_pts_.size()) < redetect_below_)
   {
+    mrpt::system::CTimeLoggerEntry      tlr(profiler_, "track.redetectBackproject");
     mola::vision::GridDistributorParams gp;
     gp.max_corners  = max_features_;
     gp.min_distance = min_distance_;
@@ -376,8 +384,14 @@ mrpt::poses::CPose3D RgbdSlam::processFrame(
 
   if (selector.shouldBeKeyframe(stats))
   {
-    insertCurrentKeyframe();
-    runWindowedBA();
+    {
+      mrpt::system::CTimeLoggerEntry tlk(profiler_, "keyframe.insert");
+      insertCurrentKeyframe();
+    }
+    {
+      mrpt::system::CTimeLoggerEntry tlb(profiler_, "keyframe.windowedBA");
+      runWindowedBA();
+    }
     frames_since_kf_ = 0;
     publishMap(timestamp);
   }
@@ -385,8 +399,11 @@ mrpt::poses::CPose3D RgbdSlam::processFrame(
   prev_gray_ = gray;
   trajectory_.push_back(pose_wc_.translation());
   publishLocalization(timestamp);
-  publishViz2D(gray, false);
-  publishViz3D();
+  {
+    mrpt::system::CTimeLoggerEntry tlv(profiler_, "viz");
+    publishViz2D(gray, false);
+    publishViz3D();
+  }
   return pose_wc_;
 }
 

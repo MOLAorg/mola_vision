@@ -59,7 +59,8 @@ float medianParallax(
   {
     return 0.f;
   }
-  std::nth_element(d.begin(), d.begin() + d.size() / 2, d.end());
+  const auto mid = static_cast<std::ptrdiff_t>(d.size() / 2);
+  std::nth_element(d.begin(), d.begin() + mid, d.end());
   return d[d.size() / 2];
 }
 }  // namespace
@@ -187,8 +188,12 @@ mrpt::poses::CPose3D VisualSlam::processFrame(
     const mrpt::img::CImage& gray_in, const mrpt::img::TCamera& cam,
     const mrpt::Clock::time_point& timestamp)
 {
-  camera_                      = cam;
+  mrpt::system::CTimeLoggerEntry tle(profiler_, "processFrame");
+
+  camera_ = cam;
+  profiler_.enter("grayscale");
   const mrpt::img::CImage gray = gray_in.grayscale();
+  profiler_.leave("grayscale");
   ++frame_count_;
 
   if (prev_gray_.isEmpty())
@@ -208,7 +213,9 @@ mrpt::poses::CPose3D VisualSlam::processFrame(
     mola::vision::LKParams                 lk;
     lk.win_size   = lk_win_size_;
     lk.max_levels = lk_max_levels_;
+    profiler_.enter("init.trackLK");
     mola::vision::calcOpticalFlowPyrLK(prev_gray_, gray, track_pts_, next_pts, status, lk);
+    profiler_.leave("init.trackLK");
 
     std::vector<mrpt::math::TPoint2Df> kept_ref;
     std::vector<mrpt::math::TPoint2Df> kept_cur;
@@ -241,7 +248,10 @@ mrpt::poses::CPose3D VisualSlam::processFrame(
   }
 
   // TRACKING.
-  trackAndLocalize(gray);
+  {
+    mrpt::system::CTimeLoggerEntry t2(profiler_, "track.localize");
+    trackAndLocalize(gray);
+  }
 
   mola::vision::KeyframeSelectorParams sp;
   sp.max_frames_gap    = kf_max_frames_gap_;
@@ -260,9 +270,18 @@ mrpt::poses::CPose3D VisualSlam::processFrame(
 
   if (selector.shouldBeKeyframe(stats))
   {
-    spawnTriangulatedLandmarks();
-    insertCurrentKeyframe();
-    runWindowedBA();
+    {
+      mrpt::system::CTimeLoggerEntry t3(profiler_, "keyframe.spawnLandmarks");
+      spawnTriangulatedLandmarks();
+    }
+    {
+      mrpt::system::CTimeLoggerEntry t4(profiler_, "keyframe.insert");
+      insertCurrentKeyframe();
+    }
+    {
+      mrpt::system::CTimeLoggerEntry t5(profiler_, "keyframe.windowedBA");
+      runWindowedBA();
+    }
     frames_since_kf_ = 0;
     publishMap(timestamp);
   }
@@ -270,8 +289,11 @@ mrpt::poses::CPose3D VisualSlam::processFrame(
   prev_gray_ = gray;
   trajectory_.push_back(pose_wc_.translation());
   publishLocalization(timestamp);
-  publishViz2D(gray);
-  publishViz3D();
+  {
+    mrpt::system::CTimeLoggerEntry t6(profiler_, "viz");
+    publishViz2D(gray);
+    publishViz3D();
+  }
   return pose_wc_;
 }
 
@@ -286,7 +308,9 @@ bool VisualSlam::tryInitialize(const mrpt::img::CImage& gray)
   mola::vision::undistortPoints(init_ref_pts_, camera_, n1);
   mola::vision::undistortPoints(track_pts_, camera_, n2);
 
+  profiler_.enter("init.essentialRANSAC");
   const auto er = mola::vision::estimateEssentialRANSAC(n1, n2);
+  profiler_.leave("init.essentialRANSAC");
   if (!er.success || er.num_inliers < init_min_inliers_)
   {
     return false;
@@ -329,7 +353,9 @@ bool VisualSlam::tryInitialize(const mrpt::img::CImage& gray)
   P2.col(3)        = t;
   std::vector<TPoint3Df> pts3d;
   std::vector<bool>      valid;
+  profiler_.enter("init.triangulate");
   mola::vision::triangulatePoints(in1, in2, P1, P2, pts3d, valid);
+  profiler_.leave("init.triangulate");
 
   // Build the map and the two bootstrap keyframes.
   landmarks_.clear();
@@ -399,7 +425,9 @@ void VisualSlam::trackAndLocalize(const mrpt::img::CImage& gray)
   mola::vision::LKParams                 lk;
   lk.win_size   = lk_win_size_;
   lk.max_levels = lk_max_levels_;
+  profiler_.enter("track.LK");
   mola::vision::calcOpticalFlowPyrLK(prev_gray_, gray, track_pts_, next_pts, status, lk);
+  profiler_.leave("track.LK");
 
   // 3D-2D correspondences for PnP.
   std::vector<TPoint3Df> worldPts;
@@ -424,6 +452,7 @@ void VisualSlam::trackAndLocalize(const mrpt::img::CImage& gray)
   std::vector<bool> pnp_outlier(next_pts.size(), false);
   if (static_cast<int>(worldPts.size()) >= min_pnp_points_)
   {
+    mrpt::system::CTimeLoggerEntry tle(profiler_, "track.PnP");
     const auto res = mola::vision::solvePnP(worldPts, pixels, camera_, pose_cw_);
     if (res.converged)
     {
@@ -468,6 +497,7 @@ void VisualSlam::trackAndLocalize(const mrpt::img::CImage& gray)
   // Replenish features when tracking gets sparse (new candidates, lm = -1).
   if (static_cast<int>(track_pts_.size()) < redetect_below_)
   {
+    mrpt::system::CTimeLoggerEntry      tle(profiler_, "track.redetect");
     mola::vision::GridDistributorParams gp;
     gp.max_corners  = max_features_;
     gp.min_distance = min_distance_;

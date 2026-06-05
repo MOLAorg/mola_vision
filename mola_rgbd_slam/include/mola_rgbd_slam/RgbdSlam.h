@@ -13,6 +13,7 @@
 #include <mrpt/math/TPoint2D.h>
 #include <mrpt/math/TPoint3D.h>
 #include <mrpt/poses/CPose3D.h>
+#include <mrpt/system/CTimeLogger.h>
 
 #include <deque>
 #include <vector>
@@ -93,6 +94,11 @@ class RgbdSlam : public mola::FrontEndBase,
   /** Number of inserted keyframes. */
   size_t numKeyframes() const { return keyframes_.size(); }
 
+  /** Per-stage timing profiler. Dumps a full table on destruction; call
+   *  `profiler().dumpAllStats()` to print it on demand. */
+  mrpt::system::CTimeLogger&       profiler() { return profiler_; }
+  const mrpt::system::CTimeLogger& profiler() const { return profiler_; }
+
   /** @} */
 
  private:
@@ -149,6 +155,8 @@ class RgbdSlam : public mola::FrontEndBase,
   int                                frames_since_kf_ = 0;
   int                                ref_kf_features_ = 0;
   bool                               gui_created_     = false;
+
+  mrpt::system::CTimeLogger profiler_{true, "RgbdSlam"};
 
   void insertCurrentKeyframe();
   void publishLocalization(const mrpt::Clock::time_point& timestamp);
