@@ -6,7 +6,7 @@ classic computer vision for the MOLA SLAM framework, built on **MRPT 3.x**
 
 Packages:
 - `mola_libvision` — reusable CV library (namespace `mola::vision`).
-- `mola_basalt_vio` — Basalt VIO wrapper (alternative backend).
+- `mola_visual_tracking` — demo MOLA module exercising the library.
 
 ## Build & test (ROS-agnostic; build_type cmake)
 This package needs `mola_common` + MRPT 3.x on the prefix path. MRPT 2.x is the

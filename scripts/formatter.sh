@@ -12,8 +12,7 @@ else
 fi
 
 find \
-    mola_basalt_vio \
     mola_libvision \
+    mola_visual_tracking \
     \( -iname "*.h" -o -iname "*.hpp" -o -iname "*.cpp" -o -iname "*.c" \) \
-    -not -path "mola_basalt_vio/3rdparty/*" \
   -print0 | xargs -0 -r -t clang-format-14 "${MODE[@]}"
