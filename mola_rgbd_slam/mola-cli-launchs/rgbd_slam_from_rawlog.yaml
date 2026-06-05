@@ -53,3 +53,7 @@ modules:
       kf_min_tracked: 80
       kf_min_tracked_ratio: 0.6
       kf_min_parallax_px: 18.0
+      # 2D feature-overlay subwindow in MolaViz:
+      publish_viz_2d: true
+      viz2d_title: RGB-D SLAM tracking
+      viz2d_win_pos: 10 60 800 600 # [x y width height]

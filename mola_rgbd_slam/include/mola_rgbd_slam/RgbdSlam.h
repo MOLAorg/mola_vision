@@ -94,11 +94,14 @@ class RgbdSlam : public mola::FrontEndBase,
   float       max_depth_      = 8.0f;
   int         ba_window_size_ = 8;  ///< number of recent keyframes in the BA window
   // keyframe-selection policy (mola_libvision KeyframeSelectorParams subset):
-  int   kf_max_frames_gap_    = 20;
-  int   kf_min_frames_gap_    = 2;
-  int   kf_min_tracked_       = 80;
-  float kf_min_tracked_ratio_ = 0.6f;
-  float kf_min_parallax_px_   = 18.0f;
+  int         kf_max_frames_gap_    = 20;
+  int         kf_min_frames_gap_    = 2;
+  int         kf_min_tracked_       = 80;
+  float       kf_min_tracked_ratio_ = 0.6f;
+  float       kf_min_parallax_px_   = 18.0f;
+  bool        publish_viz_2d_       = true;  ///< push a 2D feature-overlay subwindow to MolaViz
+  std::string viz2d_title_          = "RGB-D SLAM tracking";
+  std::string viz2d_win_pos_;  ///< "x y width height" (optional)
 
   // ---- landmark map (world frame) ----
   struct Landmark
@@ -128,10 +131,12 @@ class RgbdSlam : public mola::FrontEndBase,
   int                                frame_count_     = 0;
   int                                frames_since_kf_ = 0;
   int                                ref_kf_features_ = 0;
+  bool                               gui_created_     = false;
 
   void insertCurrentKeyframe();
   void publishLocalization(const mrpt::Clock::time_point& timestamp);
   void publishMap(const mrpt::Clock::time_point& timestamp);
+  void publishViz2D(const mrpt::img::CImage& gray, bool just_initialized);
   void runWindowedBA();
 };
 
