@@ -1,0 +1,67 @@
+# -----------------------------------------------------------------------------
+#                        MOLA system definition
+# Monocular visual SLAM (mola::VisualSlam, mode=mono) from a video file or
+# camera, via mola_input_video. Provide camera intrinsics in the dataset/source
+# (or an undistorted stream), since monocular SLAM needs the pinhole model.
+#
+# Note: a single camera gives no metric scale; the trajectory and map are
+# recovered up to a global scale fixed by the bootstrap baseline.
+#
+# Usage:
+#   VIDEO_FILE=/path/to/video.mp4 \
+#   mola-cli visual_slam_mono_from_video.yaml
+# -----------------------------------------------------------------------------
+
+modules:
+  # =====================
+  # MolaViz (ImGui GUI)
+  # =====================
+  - name: viz
+    type: ${MOLA_GUI_MODULE|mola::MolaVizImGui}
+    params: ~
+
+  # =====================
+  # Video input
+  # =====================
+  - name: video_input
+    type: mola::VideoDataset
+    execution_rate: 30 # Hz
+    params:
+      video_file: ${VIDEO_FILE}
+      sensor_label: ${VIDEO_SENSOR_LABEL|camera}
+      time_warp_scale: ${MOLA_TIME_WARP|1.0}
+      start_paused: ${MOLA_DATASET_START_PAUSED|false}
+
+  # =====================
+  # Monocular visual SLAM front-end
+  # =====================
+  - name: visual_slam
+    type: mola::VisualSlam
+    raw_data_source: video_input
+    execution_rate: 30 # Hz
+    verbosity_level: "${MOLA_VERBOSITY|INFO}"
+    params:
+      sensor_label: ${VIDEO_SENSOR_LABEL|camera}
+      mode: mono
+      max_features: 400
+      min_distance: 12.0
+      redetect_below: 150
+      lk_win_size: 21
+      lk_max_levels: 3
+      min_pnp_points: 12
+      ba_window_size: 8
+      # two-view bootstrap:
+      init_min_parallax_px: 30.0
+      init_min_inliers: 50
+      tri_min_parallax_deg: 2.0
+      # keyframe policy:
+      kf_max_frames_gap: 20
+      kf_min_frames_gap: 2
+      kf_min_tracked: 80
+      kf_min_tracked_ratio: 0.6
+      kf_min_parallax_px: 18.0
+      # visualization:
+      publish_viz_2d: true
+      publish_viz_3d: true
+      viz2d_title: Visual SLAM (mono)
+      viz2d_win_pos: 10 60 800 600 # [x y width height]
