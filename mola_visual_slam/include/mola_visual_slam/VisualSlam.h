@@ -13,6 +13,7 @@
 #include <mrpt/math/TPoint2D.h>
 #include <mrpt/math/TPoint3D.h>
 #include <mrpt/poses/CPose3D.h>
+#include <mrpt/system/CTimeLogger.h>
 
 #include <deque>
 #include <string>
@@ -76,6 +77,11 @@ class VisualSlam : public mola::FrontEndBase,
   size_t               numLandmarks() const { return landmarks_.size(); }
   size_t               numActiveLandmarks() const;
   size_t               numKeyframes() const { return keyframes_.size(); }
+
+  /** Per-stage timing profiler. Dumps a full table on destruction; call
+   *  `profiler().dumpAllStats()` to print it on demand. */
+  mrpt::system::CTimeLogger&       profiler() { return profiler_; }
+  const mrpt::system::CTimeLogger& profiler() const { return profiler_; }
 
   /** @} */
 
@@ -149,6 +155,9 @@ class VisualSlam : public mola::FrontEndBase,
 
   // ---- initialization buffer ----
   std::vector<mrpt::math::TPoint2Df> init_ref_pts_;  ///< feature pixels in the first frame
+
+  // ---- profiling ----
+  mrpt::system::CTimeLogger profiler_{true, "VisualSlam"};
 
   bool tryInitialize(const mrpt::img::CImage& gray);
   void detectInitialFeatures(const mrpt::img::CImage& gray);
