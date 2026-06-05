@@ -76,6 +76,20 @@ class RgbdSlam : public mola::FrontEndBase,
   /** Number of landmarks currently in the map (including culled-but-not-erased). */
   size_t numLandmarks() const { return landmarks_.size(); }
 
+  /** Number of non-culled (good) landmarks. */
+  size_t numActiveLandmarks() const
+  {
+    size_t n = 0;
+    for (const auto& lm : landmarks_)
+    {
+      if (!lm.bad)
+      {
+        ++n;
+      }
+    }
+    return n;
+  }
+
   /** Number of inserted keyframes. */
   size_t numKeyframes() const { return keyframes_.size(); }
 
@@ -93,6 +107,7 @@ class RgbdSlam : public mola::FrontEndBase,
   float       min_depth_      = 0.2f;
   float       max_depth_      = 8.0f;
   int         ba_window_size_ = 8;  ///< number of recent keyframes in the BA window
+  int         cull_min_obs_   = 2;  ///< cull dropped landmarks observed in fewer keyframes
   // keyframe-selection policy (mola_libvision KeyframeSelectorParams subset):
   int         kf_max_frames_gap_    = 20;
   int         kf_min_frames_gap_    = 2;

@@ -89,6 +89,9 @@ TEST(RgbdSlam, RecoversPureTranslation)
   // Map and keyframes were created.
   EXPECT_GT(slam.numLandmarks(), 50u);
   EXPECT_GE(slam.numKeyframes(), 1u);
+  // Active (non-culled) landmarks are a subset of all landmarks.
+  EXPECT_LE(slam.numActiveLandmarks(), slam.numLandmarks());
+  EXPECT_GT(slam.numActiveLandmarks(), 50u);
 
   // Recovered camera-in-world translation should match ground truth.
   const float gt_x = static_cast<float>(N - 1) * kStep;
