@@ -7,6 +7,9 @@ classic computer vision for the MOLA SLAM framework, built on **MRPT 3.x**
 Packages:
 - `mola_libvision` — reusable CV library (namespace `mola::vision`).
 - `mola_visual_tracking` — demo MOLA module exercising the library.
+- `mola_rgbd_slam` — RGB-D visual SLAM front-end (`mola::RgbdSlam`):
+  detect + LK-track features, depth back-projection, robust PnP tracking, and
+  sliding-window BA over keyframes; publishes pose + sparse map.
 
 ## Build & test (ROS-agnostic; build_type cmake)
 This package needs `mola_common` + MRPT 3.x on the prefix path. MRPT 2.x is the
