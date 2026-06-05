@@ -75,6 +75,7 @@ void RgbdSlam::initialize_frontend(const Yaml& c)
     getF("min_depth", min_depth_);
     getF("max_depth", max_depth_);
     getI("ba_window_size", ba_window_size_);
+    getI("cull_min_obs", cull_min_obs_);
     getI("kf_max_frames_gap", kf_max_frames_gap_);
     getI("kf_min_frames_gap", kf_min_frames_gap_);
     getI("kf_min_tracked", kf_min_tracked_);
@@ -283,6 +284,15 @@ mrpt::poses::CPose3D RgbdSlam::processFrame(
   {
     if (status[i] == mola::vision::TrackStatus::LOST || pnp_outlier[i])
     {
+      // Cull spurious landmarks: a dropped feature whose landmark never made it
+      // into a second keyframe (observation count below the threshold) is most
+      // likely a one-shot false detection. Mark it bad so it is excluded from
+      // PnP, BA, and the published map.
+      const int lm = track_lm_[i];
+      if (lm >= 0 && landmarks_[lm].observations < cull_min_obs_)
+      {
+        landmarks_[lm].bad = true;
+      }
       continue;
     }
     kept_pts.push_back(next_pts[i]);
