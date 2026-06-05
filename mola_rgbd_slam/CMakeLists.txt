@@ -16,6 +16,7 @@ find_mola_package(mola_kernel)
 find_package(mrpt_obs REQUIRED)
 find_package(mrpt_img REQUIRED)
 find_package(mrpt_maps REQUIRED)
+find_package(mrpt_viz REQUIRED)
 find_package(TBB REQUIRED)
 find_package(mola_libvision REQUIRED)
 
@@ -36,6 +37,7 @@ mola_add_library(
     mrpt::mrpt_obs
     mrpt::mrpt_img
     mrpt::mrpt_maps
+    mrpt::mrpt_viz
   CMAKE_DEPENDENCIES
     mola_kernel
     mola_libvision

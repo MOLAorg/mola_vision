@@ -15,6 +15,11 @@
 #include <mrpt/maps/CSimplePointsMap.h>
 #include <mrpt/obs/CObservation3DRangeScan.h>
 #include <mrpt/obs/CObservationImage.h>
+#include <mrpt/viz/CFrustum.h>
+#include <mrpt/viz/CPointCloud.h>
+#include <mrpt/viz/CSetOfLines.h>
+#include <mrpt/viz/CSetOfObjects.h>
+#include <mrpt/viz/stock_objects.h>
 
 #include <algorithm>
 #include <cmath>
@@ -92,6 +97,10 @@ void RgbdSlam::initialize_frontend(const Yaml& c)
     if (cfg.has("viz2d_win_pos"))
     {
       viz2d_win_pos_ = cfg["viz2d_win_pos"].as<std::string>();
+    }
+    if (cfg.has("publish_viz_3d"))
+    {
+      publish_viz_3d_ = cfg["publish_viz_3d"].as<bool>();
     }
   }
 
@@ -207,9 +216,11 @@ mrpt::poses::CPose3D RgbdSlam::processFrame(
     prev_gray_       = gray;
     frame_count_     = 1;
     frames_since_kf_ = 0;
+    trajectory_.push_back(pose_wc_.translation());
     publishLocalization(timestamp);
     publishMap(timestamp);
     publishViz2D(gray, true);
+    publishViz3D();
     return pose_wc_;
   }
 
@@ -372,8 +383,10 @@ mrpt::poses::CPose3D RgbdSlam::processFrame(
   }
 
   prev_gray_ = gray;
+  trajectory_.push_back(pose_wc_.translation());
   publishLocalization(timestamp);
   publishViz2D(gray, false);
+  publishViz3D();
   return pose_wc_;
 }
 
@@ -538,6 +551,61 @@ void RgbdSlam::publishViz2D(const mrpt::img::CImage& gray, bool just_initialized
   }
 
   visualizer_->subwindow_update_visualization(annotated, viz2d_title_);
+}
+
+void RgbdSlam::publishViz3D()
+{
+  if (!publish_viz_3d_ || !visualizer_)
+  {
+    return;
+  }
+
+  auto scene = mrpt::viz::CSetOfObjects::Create();
+
+  // --- sparse landmark cloud ---
+  auto cloud = mrpt::viz::CPointCloud::Create();
+  cloud->setPointSize(2.0f);
+  cloud->setColor_u8(mrpt::img::TColor(200, 200, 200));
+  for (const auto& lm : landmarks_)
+  {
+    if (!lm.bad)
+    {
+      cloud->insertPoint(lm.pos.x, lm.pos.y, lm.pos.z);
+    }
+  }
+  scene->insert(cloud);
+
+  // --- estimated trajectory ---
+  if (trajectory_.size() >= 2)
+  {
+    auto traj = mrpt::viz::CSetOfLines::Create();
+    traj->setColor_u8(mrpt::img::TColor(40, 200, 40));
+    traj->setLineWidth(2.0f);
+    for (size_t i = 1; i < trajectory_.size(); ++i)
+    {
+      const auto& a = trajectory_[i - 1];
+      const auto& b = trajectory_[i];
+      traj->appendLine(a.x, a.y, a.z, b.x, b.y, b.z);
+    }
+    scene->insert(traj);
+  }
+
+  // --- past keyframe frustums (gray) ---
+  for (const auto& kf : keyframes_)
+  {
+    auto fr = mrpt::viz::CFrustum::Create();
+    fr->setColor_u8(mrpt::img::TColor(120, 120, 120, 180));
+    fr->setPose(-kf.pose_cw);  // camera -> world
+    scene->insert(fr);
+  }
+
+  // --- current camera frustum (green) ---
+  auto cur = mrpt::viz::CFrustum::Create();
+  cur->setColor_u8(mrpt::img::TColor(40, 200, 40));
+  cur->setPose(pose_wc_);
+  scene->insert(cur);
+
+  visualizer_->update_3d_object("rgbd_slam", scene);
 }
 
 void RgbdSlam::publishMap(const mrpt::Clock::time_point& timestamp)
