@@ -42,4 +42,20 @@ target_include_directories(test_kitti_stereo PRIVATE
 )
 gtest_discover_tests(test_kitti_stereo)
 
+# Integration test: end-to-end stereo loop closure on KITTI (skips unless
+# KITTI_STEREO_DIR / KITTI_POSES are set).
+add_executable(test_kitti_loop test_kitti_loop.cpp)
+target_link_libraries(test_kitti_loop
+  PRIVATE
+    mola_visual_slam
+    mola::mola_libvision
+    GTest::GTest
+    GTest::Main
+)
+target_include_directories(test_kitti_loop PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+)
+gtest_discover_tests(test_kitti_loop)
+
+
 
