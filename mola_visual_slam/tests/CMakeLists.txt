@@ -28,3 +28,18 @@ target_include_directories(test_tum_mono PRIVATE
 )
 gtest_discover_tests(test_tum_mono)
 
+# Integration test on a real KITTI odometry stereo sequence. Skips at runtime
+# unless KITTI_STEREO_DIR / KITTI_POSES are set.
+add_executable(test_kitti_stereo test_kitti_stereo.cpp)
+target_link_libraries(test_kitti_stereo
+  PRIVATE
+    mola_visual_slam
+    GTest::GTest
+    GTest::Main
+)
+target_include_directories(test_kitti_stereo PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+)
+gtest_discover_tests(test_kitti_stereo)
+
+

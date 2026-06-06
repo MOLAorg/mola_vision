@@ -10,9 +10,11 @@ Packages:
 - `mola_rgbd_slam` — RGB-D visual SLAM front-end (`mola::RgbdSlam`):
   detect + LK-track features, depth back-projection, robust PnP tracking, and
   sliding-window BA over keyframes; publishes pose + sparse map.
-- `mola_visual_slam` — monocular visual SLAM front-end (`mola::VisualSlam`,
-  `mode=mono`): essential-matrix two-view bootstrap, PnP tracking, new landmarks
-  by cross-keyframe triangulation, windowed BA. Up-to-scale (stereo: future).
+- `mola_visual_slam` — monocular/stereo visual SLAM front-end
+  (`mola::VisualSlam`). `mode=mono`: essential-matrix bootstrap, PnP tracking,
+  cross-keyframe triangulation, windowed BA (up-to-scale). `mode=stereo`: pairs
+  image_0/image_1, metric depth from `matchStereo`, PnP tracking (true metric
+  scale; scale-anchored stereo BA still pending). KITTI/TUM integration tests.
 
 ## Build & test (ROS-agnostic; build_type cmake)
 This package needs `mola_common` + the MRPT-3.x `mola_kernel`/`mola_viz` +

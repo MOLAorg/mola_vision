@@ -137,6 +137,64 @@ TEST(VisualSlam, MonoBootstrapAndTrack)
   EXPECT_NEAR(last.roll(), 0.0, 3.0 * M_PI / 180.0);
 }
 
+// A sparse, well-spaced cloud (grid of two depth layers). Sparse so stereo
+// matching along the epipolar row is unambiguous (no near blob within the
+// disparity range), which a synthetic identical-blob renderer needs; real
+// textured imagery does not.
+static std::vector<mrpt::math::TPoint3D> makeSparseCloud()
+{
+  std::vector<mrpt::math::TPoint3D> pts;
+  for (int iy = 0; iy < 6; ++iy)
+  {
+    for (int ix = 0; ix < 8; ++ix)
+    {
+      const float X = -1.4f + 0.4f * static_cast<float>(ix);
+      const float Y = -1.0f + 0.4f * static_cast<float>(iy);
+      const float Z = ((ix + iy) % 2 == 0) ? 3.0f : 5.0f;
+      pts.push_back({X, Y, Z});
+    }
+  }
+  return pts;
+}
+
+TEST(VisualSlam, StereoRecoversMetricScale)
+{
+  mola::VisualSlam slam;
+  slam.setMinLoggingLevel(mrpt::system::LVL_ERROR);
+
+  const auto   cam      = makeCamera();
+  const auto   cloud    = makeSparseCloud();
+  const int    N        = 20;
+  const double step     = 0.04;  // +X translation per frame [m]
+  const double baseline = 0.10;  // stereo baseline [m]
+
+  mrpt::poses::CPose3D last;
+  for (int k = 0; k < N; ++k)
+  {
+    const mrpt::poses::CPose3D gt(static_cast<double>(k) * step, 0, 0, 0, 0, 0);
+    // Right camera sits +baseline along the (rectified) camera x axis.
+    const mrpt::poses::CPose3D gt_right = gt + mrpt::poses::CPose3D(baseline, 0, 0, 0, 0, 0);
+    const auto                 left     = renderView(gt, cloud);
+    const auto                 right    = renderView(gt_right, cloud);
+    last = slam.processStereoFrame(left, right, cam, baseline, mrpt::Clock::now());
+  }
+
+  EXPECT_TRUE(slam.isInitialized());
+  EXPECT_GT(slam.numActiveLandmarks(), 40u);
+
+  // Stereo fixes the scale, so the ABSOLUTE translation must match (in meters),
+  // unlike monocular which is only correct up to an arbitrary scale. Tolerance
+  // reflects synthetic integer-pixel detection quantization (real textured
+  // imagery is sub-pixel and far more precise).
+  const double gt_x = static_cast<double>(N - 1) * step;  // 0.76 m
+  EXPECT_NEAR(last.x(), gt_x, 0.10);  // within ~13% (metric, not arbitrary scale)
+  EXPECT_NEAR(last.y(), 0.0, 0.05);
+  EXPECT_NEAR(last.z(), 0.0, 0.05);
+  EXPECT_NEAR(last.yaw(), 0.0, 3.0 * M_PI / 180.0);
+  EXPECT_NEAR(last.pitch(), 0.0, 3.0 * M_PI / 180.0);
+  EXPECT_NEAR(last.roll(), 0.0, 3.0 * M_PI / 180.0);
+}
+
 TEST(VisualSlam, StaysUninitializedWithoutParallax)
 {
   mola::VisualSlam slam;
