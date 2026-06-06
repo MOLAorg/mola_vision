@@ -47,6 +47,7 @@ set(LIB_SRCS
   # ORB descriptor + loop detector (place recognition):
   src/orb_detector.cpp
   src/orb_loop_detector.cpp
+  src/loop_closure.cpp
 )
 
 set(LIB_PUBLIC_HDRS
@@ -72,6 +73,7 @@ set(LIB_PUBLIC_HDRS
   include/mola_libvision/marg_prior.h
   include/mola_libvision/orb_descriptor.h
   include/mola_libvision/orb_loop_detector.h
+  include/mola_libvision/loop_closure.h
 )
 
 mola_add_library(

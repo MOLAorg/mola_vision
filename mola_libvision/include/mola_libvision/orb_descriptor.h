@@ -57,4 +57,19 @@ struct OrbParams
 /** Hamming distance (number of differing bits) between two ORB descriptors. */
 [[nodiscard]] int hammingDistance(const OrbDescriptor& a, const OrbDescriptor& b);
 
+/** A descriptor match: indices into the two input sets + the Hamming distance. */
+struct DescriptorMatch
+{
+  int query_idx = -1;
+  int train_idx = -1;
+  int distance  = 0;
+};
+
+/** Brute-force descriptor matching from `query` to `train` with a max-Hamming
+ *  gate and Lowe's best/second-best ratio test. Returns one match per accepted
+ *  query descriptor. */
+[[nodiscard]] std::vector<DescriptorMatch> matchOrbDescriptors(
+    const std::vector<OrbDescriptor>& query, const std::vector<OrbDescriptor>& train,
+    int max_hamming = 60, float lowe_ratio = 0.8f);
+
 }  // namespace mola::vision

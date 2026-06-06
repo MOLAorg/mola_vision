@@ -143,3 +143,10 @@ mola_vision_add_test(test_orb_descriptor
 mola_vision_add_test(test_orb_loop_detector
   SOURCES test_orb_loop_detector.cpp
 )
+
+# ----------------------------------------------------------------------------
+# Test: loop-closure geometric verification (descriptor match + PnP)
+# ----------------------------------------------------------------------------
+mola_vision_add_test(test_loop_closure
+  SOURCES test_loop_closure.cpp
+)

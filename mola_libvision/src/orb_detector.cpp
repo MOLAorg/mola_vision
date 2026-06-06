@@ -155,3 +155,39 @@ int mola::vision::hammingDistance(const OrbDescriptor& a, const OrbDescriptor& b
   }
   return d;
 }
+
+std::vector<DescriptorMatch> mola::vision::matchOrbDescriptors(
+    const std::vector<OrbDescriptor>& query, const std::vector<OrbDescriptor>& train,
+    int max_hamming, float lowe_ratio)
+{
+  std::vector<DescriptorMatch> out;
+  if (train.size() < 2)
+  {
+    return out;
+  }
+  for (size_t i = 0; i < query.size(); ++i)
+  {
+    int best   = 1 << 30;
+    int second = 1 << 30;
+    int best_j = -1;
+    for (size_t j = 0; j < train.size(); ++j)
+    {
+      const int d = hammingDistance(query[i], train[j]);
+      if (d < best)
+      {
+        second = best;
+        best   = d;
+        best_j = static_cast<int>(j);
+      }
+      else if (d < second)
+      {
+        second = d;
+      }
+    }
+    if (best <= max_hamming && static_cast<float>(best) < lowe_ratio * static_cast<float>(second))
+    {
+      out.push_back({static_cast<int>(i), best_j, best});
+    }
+  }
+  return out;
+}
