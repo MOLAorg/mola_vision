@@ -19,6 +19,7 @@
   <depend>mola_common</depend>
   <depend>mrpt_img</depend>
   <depend>mrpt_poses</depend>
+  <depend>gtsam</depend>
 
   <doc_depend>doxygen</doc_depend>
 

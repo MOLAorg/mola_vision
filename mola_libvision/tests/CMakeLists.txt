@@ -122,3 +122,10 @@ mola_vision_add_test(test_gravity_and_interfaces
 mola_vision_add_test(test_marg_prior
   SOURCES test_marg_prior.cpp
 )
+
+# ----------------------------------------------------------------------------
+# Test: GTSAM pose-graph optimizer (loop closure + robust kernel)
+# ----------------------------------------------------------------------------
+mola_vision_add_test(test_pose_graph
+  SOURCES test_pose_graph.cpp
+)
