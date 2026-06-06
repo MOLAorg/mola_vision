@@ -44,7 +44,7 @@ class VisualTracking : public mola::FrontEndBase
   // See docs in base class
   void initialize_frontend(const Yaml& cfg) override;
   void spinOnce() override;
-  void onNewObservation(const CObservation::Ptr& o) override;
+  void onNewObservation(const CObservation::ConstPtr& o) override;
 
  private:
   // --- parameters ---

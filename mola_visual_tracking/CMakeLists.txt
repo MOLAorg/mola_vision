@@ -15,6 +15,7 @@ find_mola_package(mola_kernel)
 
 find_package(mrpt_obs REQUIRED)
 find_package(mrpt_img REQUIRED)
+find_package(TBB REQUIRED)
 find_package(mola_libvision REQUIRED)
 
 set(LIB_SRCS
@@ -30,7 +31,7 @@ mola_add_library(
   SOURCES ${LIB_SRCS} ${LIB_PUBLIC_HDRS}
   PUBLIC_LINK_LIBRARIES
     mola::mola_kernel
-    mola_libvision
+    mola::mola_libvision
     mrpt::mrpt_obs
     mrpt::mrpt_img
   CMAKE_DEPENDENCIES
