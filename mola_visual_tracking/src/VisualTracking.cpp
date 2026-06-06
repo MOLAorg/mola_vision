@@ -80,7 +80,7 @@ void VisualTracking::spinOnce()
   // All work happens in onNewObservation(); nothing periodic to do here.
 }
 
-void VisualTracking::onNewObservation(const CObservation::Ptr& o)
+void VisualTracking::onNewObservation(const CObservation::ConstPtr& o)
 {
   MRPT_START
   if (!o)
@@ -88,7 +88,7 @@ void VisualTracking::onNewObservation(const CObservation::Ptr& o)
     return;
   }
 
-  auto obs = std::dynamic_pointer_cast<mrpt::obs::CObservationImage>(o);
+  auto obs = std::dynamic_pointer_cast<const mrpt::obs::CObservationImage>(o);
   if (!obs)
   {
     return;  // not an image observation
@@ -226,10 +226,10 @@ void VisualTracking::publishViz(
     }
 
     img.drawCircle(
-        static_cast<int>(p.x), static_cast<int>(p.y), 3, bad ? colOutlier : colInlier, 1);
+        {static_cast<int>(p.x), static_cast<int>(p.y)}, 3, bad ? colOutlier : colInlier, 1);
   }
 
-  img.textOut(8, 8, "tracked: " + std::to_string(pts_.size()), TColor(255, 255, 255));
+  img.textOut({8, 8}, "tracked: " + std::to_string(pts_.size()), TColor(255, 255, 255));
 
   // Wrap into a CObservationImage so the built-in MolaViz image handler shows it.
   auto annotated         = mrpt::obs::CObservationImage::Create();
