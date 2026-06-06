@@ -69,6 +69,7 @@ set(LIB_PUBLIC_HDRS
   include/mola_libvision/pose_graph_optimizer.h
   include/mola_libvision/gtsam_pose_graph_optimizer.h
   include/mola_libvision/marg_prior.h
+  include/mola_libvision/orb_descriptor.h
 )
 
 mola_add_library(

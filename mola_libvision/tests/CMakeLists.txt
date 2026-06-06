@@ -129,3 +129,10 @@ mola_vision_add_test(test_marg_prior
 mola_vision_add_test(test_pose_graph
   SOURCES test_pose_graph.cpp
 )
+
+# ----------------------------------------------------------------------------
+# Test: ORB (oriented BRIEF) descriptor
+# ----------------------------------------------------------------------------
+mola_vision_add_test(test_orb_descriptor
+  SOURCES test_orb_descriptor.cpp
+)
