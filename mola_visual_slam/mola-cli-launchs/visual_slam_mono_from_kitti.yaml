@@ -1,0 +1,67 @@
+# -----------------------------------------------------------------------------
+#                        MOLA system definition
+# Monocular visual SLAM / odometry (mola::VisualSlam, mode=mono) from the KITTI
+# odometry dataset (left grayscale camera, image_0).
+#
+# Note: a single camera gives no metric scale; the trajectory and map are
+# recovered up to a global scale (use the stereo launch for metric scale).
+#
+# Usage:
+#   KITTI_BASE_DIR=/path/to/kitti  KITTI_SEQ=00 \
+#   mola-cli visual_slam_mono_from_kitti.yaml
+# -----------------------------------------------------------------------------
+
+modules:
+  # =====================
+  # MolaViz (ImGui GUI)
+  # =====================
+  - name: viz
+    type: ${MOLA_GUI_MODULE|mola::MolaVizImGui}
+    params: ~
+
+  # =====================
+  # KITTI odometry dataset (left camera only)
+  # =====================
+  - name: kitti_input
+    type: mola::KittiOdometryDataset
+    execution_rate: 20 # Hz
+    params:
+      base_dir: ${KITTI_BASE_DIR}
+      sequence: ${KITTI_SEQ|00}
+      time_warp_scale: ${MOLA_TIME_WARP|1.0}
+      start_paused: ${MOLA_DATASET_START_PAUSED|false}
+      publish_lidar: false
+      publish_image_0: true
+      publish_image_1: false
+      publish_ground_truth: true
+
+  # =====================
+  # Monocular visual SLAM front-end (left camera, image_0)
+  # =====================
+  - name: visual_slam
+    type: mola::VisualSlam
+    raw_data_source: kitti_input
+    execution_rate: 20 # Hz
+    verbosity_level: "${MOLA_VERBOSITY|INFO}"
+    params:
+      mode: mono
+      sensor_label: image_0
+      max_features: 500
+      min_distance: 12.0
+      redetect_below: 200
+      lk_win_size: 21
+      lk_max_levels: 3
+      min_pnp_points: 12
+      ba_window_size: 8
+      init_min_parallax_px: 20.0
+      init_min_inliers: 60
+      tri_min_parallax_deg: 1.5
+      kf_max_frames_gap: 10
+      kf_min_frames_gap: 2
+      kf_min_tracked: 150
+      kf_min_tracked_ratio: 0.6
+      kf_min_parallax_px: 12.0
+      publish_viz_2d: true
+      publish_viz_3d: true
+      viz2d_title: Visual SLAM (mono, KITTI)
+      viz2d_win_pos: 10 60 1000 350 # [x y width height]
