@@ -42,8 +42,11 @@ namespace mola
  *  timestamp; depth comes directly from the stereo match (mola_libvision
  *  matchStereo), so the map and trajectory are at TRUE METRIC scale from the
  *  first frame (no essential bootstrap). LK + robust PnP for tracking; new
- *  landmarks from the stereo depth of fresh features. (Scale-anchored stereo BA
- *  is pending: see task 3.4, so windowed BA is currently skipped in stereo.)
+ *  landmarks from the stereo depth of fresh features. Windowed BA uses the
+ *  stereo disparity residual (d = fx*baseline/Z) which directly constrains
+ *  landmark depth and anchors metric scale (a pure-reprojection BA is degenerate
+ *  for forward motion). Note: windowed BA only corrects LOCAL drift; global
+ *  drift over long sequences needs loop closure / global BA (Phase 5).
  *
  *  Publishes the pose (LocalizationSourceBase) and sparse map (MapSourceBase).
  */
@@ -150,6 +153,7 @@ class VisualSlam : public mola::FrontEndBase,
     mrpt::poses::CPose3D               pose_cw;
     std::vector<int>                   lm_index;
     std::vector<mrpt::math::TPoint2Df> pixel;
+    std::vector<float>                 disparity;  ///< measured stereo disparity (-1 if none)
   };
   std::deque<KeyframeRec> keyframes_;
 
@@ -168,6 +172,7 @@ class VisualSlam : public mola::FrontEndBase,
   int                                frames_since_kf_ = 0;
   int                                ref_kf_features_ = 0;
   bool                               gui_created_     = false;
+  double                             cur_baseline_    = 0.0;  ///< stereo baseline [m] (0 = mono)
 
   // ---- initialization buffer ----
   std::vector<mrpt::math::TPoint2Df> init_ref_pts_;  ///< feature pixels in the first frame
@@ -194,7 +199,18 @@ class VisualSlam : public mola::FrontEndBase,
       double baseline, const std::vector<mrpt::math::TPoint2Df>& left_feats);
   void spawnTriangulatedLandmarks();
   void insertCurrentKeyframe();
-  void runWindowedBA();
+  /** Like insertCurrentKeyframe() but re-measures each tracked feature's stereo
+   *  disparity (one matchStereo call) and stores it, so windowed BA can use the
+   *  metric disparity residual. */
+  void insertCurrentKeyframeStereo(
+      const mrpt::img::CImage& left, const mrpt::img::CImage& right, const mrpt::img::TCamera& cam,
+      double baseline);
+  /** Windowed bundle adjustment over the recent keyframes. \p num_fixed_poses
+   *  oldest poses are held fixed: 1 for monocular (gauge only; scale is the
+   *  bootstrap's), 2 for stereo so the metric separation between two fixed
+   *  camera centers also anchors the scale (a pure-reprojection BA otherwise has
+   *  a free scale gauge that collapses the metric stereo scale). */
+  void runWindowedBA(int num_fixed_poses = 1);
   void publishLocalization(const mrpt::Clock::time_point& timestamp);
   void publishMap(const mrpt::Clock::time_point& timestamp);
   void publishViz2D(const mrpt::img::CImage& gray);

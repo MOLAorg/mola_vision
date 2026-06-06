@@ -619,6 +619,7 @@ mrpt::poses::CPose3D VisualSlam::processStereoFrame(
   mrpt::system::CTimeLoggerEntry tle(profiler_, "processStereoFrame");
 
   camera_                       = cam;
+  cur_baseline_                 = baseline;
   const mrpt::img::CImage grayL = left.grayscale();
   const mrpt::img::CImage grayR = right.grayscale();
   ++frame_count_;
@@ -648,7 +649,7 @@ mrpt::poses::CPose3D VisualSlam::processStereoFrame(
       prev_gray_ = grayL;
       return pose_wc_;  // not enough stereo matches yet; wait
     }
-    insertCurrentKeyframe();
+    insertCurrentKeyframeStereo(grayL, grayR, cam, baseline);
     state_           = State::TRACKING;
     prev_gray_       = grayL;
     frames_since_kf_ = 0;
@@ -760,13 +761,11 @@ mrpt::poses::CPose3D VisualSlam::processStereoFrame(
 
   if (selector.shouldBeKeyframe(stats))
   {
-    insertCurrentKeyframe();
-    // NOTE: windowed BA is intentionally NOT run in stereo mode yet. The shared
-    // slidingWindowBA() minimizes pure reprojection error with only the oldest
-    // pose fixed, which leaves a 1-DoF scale gauge free and slowly shrinks the
-    // metric stereo scale. Proper stereo BA (adding the right-image / disparity
-    // residual that anchors scale) is tracked as task 3.4; until then the stereo
-    // depths + PnP already give a well-constrained metric estimate.
+    insertCurrentKeyframeStereo(grayL, grayR, cam, baseline);
+    {
+      mrpt::system::CTimeLoggerEntry tlb(profiler_, "keyframe.windowedBA");
+      runWindowedBA();  // stereo disparity residual anchors scale (see BA below)
+    }
     frames_since_kf_ = 0;
     publishMap(timestamp);
   }
@@ -887,7 +886,37 @@ void VisualSlam::insertCurrentKeyframe()
   track_has_lastkf_.assign(track_pts_.size(), true);
 }
 
-void VisualSlam::runWindowedBA()
+void VisualSlam::insertCurrentKeyframeStereo(
+    const mrpt::img::CImage& left, const mrpt::img::CImage& right, const mrpt::img::TCamera& cam,
+    double baseline)
+{
+  // Re-measure each tracked feature's disparity at this keyframe (one match).
+  const auto sm = mola::vision::matchStereo(left, right, track_pts_, cam.fx(), baseline);
+
+  KeyframeRec kf;
+  kf.pose_cw = pose_cw_;
+  for (size_t i = 0; i < track_pts_.size(); ++i)
+  {
+    const int lm = track_lm_[i];
+    if (lm < 0 || landmarks_[lm].bad)
+    {
+      continue;
+    }
+    kf.lm_index.push_back(lm);
+    kf.pixel.push_back(track_pts_[i]);
+    // Observed disparity = x_left - x_right (>=0); -1 if no valid stereo match.
+    const float disp = sm.valid[i] ? (track_pts_[i].x - sm.right_pts[i].x) : -1.f;
+    kf.disparity.push_back(disp);
+    landmarks_[lm].observations++;
+  }
+  ref_kf_features_ = static_cast<int>(track_pts_.size());
+  keyframes_.push_back(std::move(kf));
+
+  track_lastkf_pix_ = track_pts_;
+  track_has_lastkf_.assign(track_pts_.size(), true);
+}
+
+void VisualSlam::runWindowedBA(int num_fixed_poses)
 {
   const int W = std::min<int>(ba_window_size_, static_cast<int>(keyframes_.size()));
   if (W < 2)
@@ -921,6 +950,10 @@ void VisualSlam::runWindowedBA()
       o.kf_index = w;
       o.lm_index = lm_local[g];
       o.pixel    = kf.pixel[j];
+      if (j < kf.disparity.size())
+      {
+        o.disparity = kf.disparity[j];
+      }
       obs.push_back(o);
     }
   }
@@ -936,8 +969,16 @@ void VisualSlam::runWindowedBA()
   }
 
   std::vector<bool> fixed(poses.size(), false);
-  fixed[0] = true;  // anchor gauge + scale on the oldest window keyframe
-  mola::vision::slidingWindowBA(poses, lms, obs, camera_, fixed);
+  const int         nfix = std::min<int>(std::max(1, num_fixed_poses), W - 1);
+  for (int w = 0; w < nfix; ++w)
+  {
+    fixed[w] = true;
+  }
+  mola::vision::BAOptions baopts;
+  // Stereo: the disparity residual (per observation) directly constrains depth
+  // and anchors metric scale; harmless for mono (no observation carries one).
+  baopts.stereo_baseline = cur_baseline_;
+  mola::vision::slidingWindowBA(poses, lms, obs, camera_, fixed, baopts);
 
   for (int w = 0; w < W; ++w)
   {
