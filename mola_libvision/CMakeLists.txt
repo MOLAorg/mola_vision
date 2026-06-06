@@ -79,12 +79,16 @@ mola_add_library(
     mrpt::mrpt_poses
     TBB::tbb
     Eigen3::Eigen
-    gtsam
   CMAKE_DEPENDENCIES
     mola_common
     mrpt_img
     mrpt_poses
 )
+
+# GTSAM is an IMPLEMENTATION detail (GtsamPoseGraphOptimizer is pimpl, no GTSAM
+# symbols in public headers), so link it PRIVATE: consumers of mola_libvision do
+# not need to find_package(GTSAM).
+target_link_libraries(${PROJECT_NAME} PRIVATE gtsam)
 
 # C++17 required (for std::optional, structured bindings, etc.)
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)

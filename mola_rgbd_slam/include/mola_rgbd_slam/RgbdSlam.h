@@ -107,7 +107,7 @@ class RgbdSlam : public mola::FrontEndBase,
   int         max_features_   = 400;
   float       min_distance_   = 12.0f;
   int         redetect_below_ = 150;  ///< spawn new landmarks when tracked count drops below this
-  int         lk_win_size_    = 21;
+  int         lk_win_size_    = 11;
   int         lk_max_levels_  = 3;
   int         min_pnp_points_ = 12;  ///< minimum 3D-2D matches to trust PnP
   float       min_depth_      = 0.2f;
