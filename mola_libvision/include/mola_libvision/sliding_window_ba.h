@@ -20,6 +20,13 @@ struct BAObservation
   int                   kf_index = -1;  ///< Index into the poses vector
   int                   lm_index = -1;  ///< Index into the landmarks vector
   mrpt::math::TPoint2Df pixel;  ///< Observed pixel (already undistorted)
+
+  /** Optional stereo disparity (x_left - x_right, pixels) for a RECTIFIED pair.
+   *  When >= 0 and BAOptions::stereo_baseline > 0, an extra disparity residual
+   *  (d = fx * baseline / Z) is added. This directly constrains landmark depth
+   *  and anchors metric scale, which pure temporal reprojection cannot do under
+   *  forward (along-axis) motion. < 0 means "no stereo for this observation". */
+  float disparity = -1.f;
 };
 
 /** Options for slidingWindowBA(). */
@@ -40,6 +47,14 @@ struct BAOptions
   /** If true and no explicit fixed mask is given, the first keyframe is held
    *  fixed to anchor the gauge. */
   bool fix_first_pose = true;
+
+  /** Stereo baseline (meters). If > 0, observations carrying a valid disparity
+   *  contribute a stereo depth residual (see BAObservation::disparity). 0
+   *  disables stereo terms (pure monocular reprojection BA). */
+  double stereo_baseline = 0.0;
+
+  /** Huber kernel width on the disparity residual, in pixels. */
+  float stereo_huber_delta = 2.0f;
 };
 
 /** Result of slidingWindowBA(). */

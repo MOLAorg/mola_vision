@@ -51,7 +51,7 @@ bool reproj(
 double robustCost(
     const std::vector<Eigen::Matrix3d>& Rs, const std::vector<Eigen::Vector3d>& ts,
     const std::vector<Eigen::Vector3d>& lms, const std::vector<BAObservation>& obs, const Intr& K,
-    double delta)
+    double delta, double baseline, double stereo_delta)
 {
   double cost = 0.0;
   for (const auto& o : obs)
@@ -64,6 +64,14 @@ double robustCost(
     }
     const double r = e.norm();
     cost += (r <= delta) ? 0.5 * r * r : delta * (r - 0.5 * delta);
+
+    // Stereo disparity residual: d = fx * baseline / Z.
+    if (baseline > 0.0 && o.disparity >= 0.f)
+    {
+      const double ed = K.fx * baseline / Xc.z() - static_cast<double>(o.disparity);
+      const double rd = std::abs(ed);
+      cost += (rd <= stereo_delta) ? 0.5 * rd * rd : stereo_delta * (rd - 0.5 * stereo_delta);
+    }
   }
   return cost;
 }
@@ -84,7 +92,9 @@ BAResult mola::vision::slidingWindowBA(
   }
 
   const Intr   K{cam.fx(), cam.fy(), cam.cx(), cam.cy()};
-  const double delta = static_cast<double>(options.huber_delta);
+  const double delta        = static_cast<double>(options.huber_delta);
+  const double baseline     = options.stereo_baseline;
+  const double stereo_delta = static_cast<double>(options.stereo_huber_delta);
 
   // Gauge: which poses are held fixed.
   std::vector<bool> fixed(nPoses, false);
@@ -131,7 +141,7 @@ BAResult mola::vision::slidingWindowBA(
 
   double lambda       = options.lambda_initial;
   double nu           = 2.0;  // Nielsen damping-increase factor
-  result.initial_cost = robustCost(Rs, ts, lms, obs, K, delta);
+  result.initial_cost = robustCost(Rs, ts, lms, obs, K, delta, baseline, stereo_delta);
   double cost         = result.initial_cost;
 
   for (int iter = 0; iter < options.max_iters; ++iter)
@@ -186,6 +196,32 @@ BAResult mola::vision::slidingWindowBA(
         Hpp[c] += w * Jp.transpose() * Jp;
         bp[c] += w * Jp.transpose() * e;
         Hpl[l][c] += w * Jp.transpose() * Jl;
+      }
+
+      // --- Stereo disparity residual: d = fx * baseline / Z (Z = Xc.z). ---
+      // Only depends on Xc.z, so it directly constrains landmark depth (and thus
+      // metric scale), which temporal reprojection cannot under forward motion.
+      if (baseline > 0.0 && o.disparity >= 0.f)
+      {
+        const Eigen::RowVector3d Jproj_d(0.0, 0.0, -K.fx * baseline * inv_z * inv_z);
+        const double             ed   = K.fx * baseline * inv_z - static_cast<double>(o.disparity);
+        const Eigen::RowVector3d Jl_d = Jproj_d * Rs[p];
+        const double             wd   = static_cast<double>(
+            huberWeight(static_cast<float>(std::abs(ed)), static_cast<float>(stereo_delta)));
+
+        Hll[l] += wd * Jl_d.transpose() * Jl_d;
+        bl[l] += wd * Jl_d.transpose() * ed;
+
+        if (poseCol[p] >= 0)
+        {
+          const int                   c = poseCol[p];
+          Eigen::Matrix<double, 1, 6> Jp_d;
+          Jp_d.leftCols<3>()  = Jproj_d * (-Rs[p] * skew(lms[l]));
+          Jp_d.rightCols<3>() = Jproj_d;
+          Hpp[c] += wd * Jp_d.transpose() * Jp_d;
+          bp[c] += wd * Jp_d.transpose() * ed;
+          Hpl[l][c] += wd * Jp_d.transpose() * Jl_d;
+        }
       }
     }
     result.num_observations_used = n_used;
@@ -281,7 +317,8 @@ BAResult mola::vision::slidingWindowBA(
       lms_new[l] += dxl[l];
     }
 
-    const double cost_new = robustCost(Rs_new, ts_new, lms_new, obs, K, delta);
+    const double cost_new =
+        robustCost(Rs_new, ts_new, lms_new, obs, K, delta, baseline, stereo_delta);
 
     // Total state increment.
     double step2 = dxp.squaredNorm();
