@@ -8,6 +8,7 @@
  * ------------------------------------------------------------------------- */
 #include <mola_libvision/image_utils.h>
 #include <mola_libvision/optical_flow.h>
+#include <tbb/parallel_for.h>
 
 #include <Eigen/SVD>
 #include <algorithm>
@@ -272,36 +273,40 @@ void mola::vision::calcOpticalFlowPyrLK(
     const auto& prev_img = prev_pyr.images[lv];
     const auto& curr_img = curr_pyr.images[lv];
 
-    for (int i = 0; i < n; ++i)
-    {
-      if (status[i] != TrackStatus::OK) continue;
-
-      const float px_prev = prev_pts[i].x / scale;
-      const float py_prev = prev_pts[i].y / scale;
-      float       px_curr = next_pts[i].x;
-      float       py_curr = next_pts[i].y;
-
-      const bool ok = lkTrackPoint(prev_img, curr_img, px_prev, py_prev, px_curr, py_curr, params);
-
-      if (ok)
-      {
-        // Propagate to next finer level (×2)
-        if (lv > 0)
+    // Points are independent within a level (each reads the shared images and
+    // writes only its own next_pts[i]/status[i]; lkTrackPoint uses thread-local
+    // scratch), so the per-point loop parallelizes cleanly.
+    tbb::parallel_for(
+        tbb::blocked_range<int>(0, n),
+        [&](const tbb::blocked_range<int>& range)
         {
-          next_pts[i].x = px_curr * 2.f;
-          next_pts[i].y = py_curr * 2.f;
-        }
-        else
-        {
-          next_pts[i].x = px_curr;
-          next_pts[i].y = py_curr;
-        }
-      }
-      else
-      {
-        status[i] = TrackStatus::LOST;
-      }
-    }
+          for (int i = range.begin(); i < range.end(); ++i)
+          {
+            if (status[i] != TrackStatus::OK)
+            {
+              continue;
+            }
+            const float px_prev = prev_pts[i].x / scale;
+            const float py_prev = prev_pts[i].y / scale;
+            float       px_curr = next_pts[i].x;
+            float       py_curr = next_pts[i].y;
+
+            const bool ok =
+                lkTrackPoint(prev_img, curr_img, px_prev, py_prev, px_curr, py_curr, params);
+
+            if (ok)
+            {
+              // Propagate to next finer level (x2)
+              const float s = (lv > 0) ? 2.f : 1.f;
+              next_pts[i].x = px_curr * s;
+              next_pts[i].y = py_curr * s;
+            }
+            else
+            {
+              status[i] = TrackStatus::LOST;
+            }
+          }
+        });
   }
 }
 
