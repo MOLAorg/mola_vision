@@ -136,3 +136,10 @@ mola_vision_add_test(test_pose_graph
 mola_vision_add_test(test_orb_descriptor
   SOURCES test_orb_descriptor.cpp
 )
+
+# ----------------------------------------------------------------------------
+# Test: ORB loop detector (place recognition)
+# ----------------------------------------------------------------------------
+mola_vision_add_test(test_orb_loop_detector
+  SOURCES test_orb_loop_detector.cpp
+)
