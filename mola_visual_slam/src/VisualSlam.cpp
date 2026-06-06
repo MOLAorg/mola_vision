@@ -8,9 +8,12 @@
 #include <mola_libvision/keyframe_selector.h>
 #include <mola_libvision/optical_flow.h>
 #include <mola_libvision/pnp_solver.h>
+#include <mola_libvision/rgbd_depth.h>
 #include <mola_libvision/sliding_window_ba.h>
+#include <mola_libvision/stereo_matcher.h>
 #include <mola_visual_slam/VisualSlam.h>
 #include <mrpt/containers/yaml.h>
+#include <mrpt/core/Clock.h>
 #include <mrpt/img/TColor.h>
 #include <mrpt/maps/CSimplePointsMap.h>
 #include <mrpt/math/CMatrixFixed.h>
@@ -99,8 +102,18 @@ void VisualSlam::initialize_frontend(const Yaml& c)
         v = cfg[k].as<bool>();
       }
     };
+    auto getD = [&](const char* k, double& v)
+    {
+      if (cfg.has(k))
+      {
+        v = cfg[k].as<double>();
+      }
+    };
     getS("sensor_label", sensor_label_);
     getS("mode", mode_);
+    getS("left_label", left_label_);
+    getS("right_label", right_label_);
+    getD("stereo_baseline", stereo_baseline_);
     getI("max_features", max_features_);
     getF("min_distance", min_distance_);
     getI("redetect_below", redetect_below_);
@@ -123,9 +136,10 @@ void VisualSlam::initialize_frontend(const Yaml& c)
     getS("viz2d_win_pos", viz2d_win_pos_);
   }
 
-  if (mode_ != "mono")
+  if (mode_ != "mono" && mode_ != "stereo")
   {
-    MRPT_LOG_WARN_STREAM("VisualSlam: only 'mono' mode is implemented; got '" << mode_ << "'.");
+    MRPT_LOG_WARN_STREAM("VisualSlam: unknown mode '" << mode_ << "'; using 'mono'.");
+    mode_ = "mono";
   }
   MRPT_LOG_INFO_STREAM("VisualSlam initialized (mode=" << mode_ << ").");
   MRPT_END
@@ -148,6 +162,44 @@ void VisualSlam::onNewObservation(const CObservation::ConstPtr& o)
   {
     return;
   }
+
+  if (mode_ == "stereo")
+  {
+    // Pair the left (image_0) and right (image_1) streams by timestamp.
+    if (obs->sensorLabel == left_label_)
+    {
+      obs->load();
+      pending_left_     = obs->image;
+      pending_left_cam_ = obs->cameraParams;
+      pending_left_ts_  = obs->timestamp;
+      have_left_        = true;
+    }
+    else if (obs->sensorLabel == right_label_)
+    {
+      obs->load();
+      pending_right_    = obs->image;
+      pending_right_ts_ = obs->timestamp;
+      have_right_       = true;
+    }
+    else
+    {
+      return;
+    }
+
+    if (have_left_ && have_right_ &&
+        std::abs(
+            mrpt::Clock::toDouble(pending_left_ts_) - mrpt::Clock::toDouble(pending_right_ts_)) <
+            0.005)
+    {
+      processStereoFrame(
+          pending_left_, pending_right_, pending_left_cam_, stereo_baseline_, pending_left_ts_);
+      have_left_  = false;
+      have_right_ = false;
+    }
+    return;
+  }
+
+  // Monocular.
   if (!sensor_label_.empty() && obs->sensorLabel != sensor_label_)
   {
     return;
@@ -515,6 +567,219 @@ void VisualSlam::trackAndLocalize(const mrpt::img::CImage& gray)
       track_has_lastkf_.push_back(false);
     }
   }
+}
+
+int VisualSlam::addStereoLandmarks(
+    const mrpt::img::CImage& left, const mrpt::img::CImage& right, const mrpt::img::TCamera& cam,
+    double baseline, const std::vector<mrpt::math::TPoint2Df>& left_feats)
+{
+  if (left_feats.empty())
+  {
+    return 0;
+  }
+  const auto sm = mola::vision::matchStereo(left, right, left_feats, cam.fx(), baseline);
+
+  mola::vision::RGBDParams dp;
+  dp.min_depth = 0.3f;
+  dp.max_depth = 100.0f;
+
+  int added = 0;
+  for (size_t i = 0; i < left_feats.size(); ++i)
+  {
+    if (!sm.valid[i])
+    {
+      continue;
+    }
+    const auto Xc = mola::vision::backprojectPixel(left_feats[i], sm.depth[i], cam, dp);
+    if (!Xc)
+    {
+      continue;
+    }
+    const auto Xw = pose_wc_.composePoint(mrpt::math::TPoint3D(*Xc));
+    Landmark   lm;
+    lm.pos          = mrpt::math::TPoint3Df(Xw);
+    lm.observations = 1;
+    track_pts_.push_back(left_feats[i]);
+    track_lm_.push_back(static_cast<int>(landmarks_.size()));
+    track_lastkf_pix_.push_back(left_feats[i]);
+    track_has_lastkf_.push_back(false);
+    landmarks_.push_back(lm);
+    ++added;
+  }
+  return added;
+}
+
+mrpt::poses::CPose3D VisualSlam::processStereoFrame(
+    const mrpt::img::CImage& left, const mrpt::img::CImage& right, const mrpt::img::TCamera& cam,
+    double baseline, const mrpt::Clock::time_point& timestamp)
+{
+  using mrpt::math::TPoint2Df;
+  using mrpt::math::TPoint3Df;
+
+  mrpt::system::CTimeLoggerEntry tle(profiler_, "processStereoFrame");
+
+  camera_                       = cam;
+  const mrpt::img::CImage grayL = left.grayscale();
+  const mrpt::img::CImage grayR = right.grayscale();
+  ++frame_count_;
+
+  mola::vision::GridDistributorParams gp;
+  gp.max_corners  = max_features_;
+  gp.min_distance = min_distance_;
+  mola::vision::GridFeatureDistributor dist(gp);
+
+  // -------- First frame: initialize a metric map directly from stereo --------
+  if (prev_gray_.isEmpty())
+  {
+    pose_cw_ = mrpt::poses::CPose3D::Identity();
+    pose_wc_ = mrpt::poses::CPose3D::Identity();
+    track_pts_.clear();
+    track_lm_.clear();
+    track_lastkf_pix_.clear();
+    track_has_lastkf_.clear();
+
+    const auto feats = dist.detect(grayL, {});
+    profiler_.enter("stereo.match");
+    addStereoLandmarks(grayL, grayR, cam, baseline, feats);
+    profiler_.leave("stereo.match");
+
+    if (landmarks_.size() < 20)
+    {
+      prev_gray_ = grayL;
+      return pose_wc_;  // not enough stereo matches yet; wait
+    }
+    insertCurrentKeyframe();
+    state_           = State::TRACKING;
+    prev_gray_       = grayL;
+    frames_since_kf_ = 0;
+    trajectory_.push_back(pose_wc_.translation());
+    publishLocalization(timestamp);
+    publishMap(timestamp);
+    publishViz2D(grayL);
+    publishViz3D();
+    return pose_wc_;
+  }
+
+  // -------- Tracking: LK (left t-1 -> left t) + PnP --------
+  std::vector<TPoint2Df>                 next_pts;
+  std::vector<mola::vision::TrackStatus> status;
+  mola::vision::LKParams                 lk;
+  lk.win_size   = lk_win_size_;
+  lk.max_levels = lk_max_levels_;
+  profiler_.enter("track.LK");
+  mola::vision::calcOpticalFlowPyrLK(prev_gray_, grayL, track_pts_, next_pts, status, lk);
+  profiler_.leave("track.LK");
+
+  std::vector<TPoint3Df> worldPts;
+  std::vector<TPoint2Df> pixels;
+  std::vector<size_t>    corr_idx;
+  for (size_t i = 0; i < next_pts.size(); ++i)
+  {
+    if (status[i] == mola::vision::TrackStatus::LOST)
+    {
+      continue;
+    }
+    const int lm = track_lm_[i];
+    if (lm < 0 || landmarks_[lm].bad)
+    {
+      continue;
+    }
+    worldPts.push_back(landmarks_[lm].pos);
+    pixels.push_back(next_pts[i]);
+    corr_idx.push_back(i);
+  }
+
+  std::vector<bool> pnp_outlier(next_pts.size(), false);
+  if (static_cast<int>(worldPts.size()) >= min_pnp_points_)
+  {
+    mrpt::system::CTimeLoggerEntry tlp(profiler_, "track.PnP");
+    const auto                     res = mola::vision::solvePnP(worldPts, pixels, cam, pose_cw_);
+    if (res.converged)
+    {
+      pose_cw_ = res.pose;
+      pose_wc_ = -pose_cw_;
+    }
+    for (size_t k = 0; k < res.inliers.size(); ++k)
+    {
+      if (!res.inliers[k])
+      {
+        pnp_outlier[corr_idx[k]] = true;
+      }
+    }
+  }
+
+  // Compact tracking arrays (drop lost / rejected; cull weak landmarks).
+  std::vector<TPoint2Df> kept_pts;
+  std::vector<int>       kept_lm;
+  std::vector<TPoint2Df> kept_lastkf;
+  std::vector<bool>      kept_has;
+  for (size_t i = 0; i < next_pts.size(); ++i)
+  {
+    if (status[i] == mola::vision::TrackStatus::LOST || pnp_outlier[i])
+    {
+      const int lm = track_lm_[i];
+      if (lm >= 0 && landmarks_[lm].observations < cull_min_obs_)
+      {
+        landmarks_[lm].bad = true;
+      }
+      continue;
+    }
+    kept_pts.push_back(next_pts[i]);
+    kept_lm.push_back(track_lm_[i]);
+    kept_lastkf.push_back(track_lastkf_pix_[i]);
+    kept_has.push_back(track_has_lastkf_[i]);
+  }
+  track_pts_        = std::move(kept_pts);
+  track_lm_         = std::move(kept_lm);
+  track_lastkf_pix_ = std::move(kept_lastkf);
+  track_has_lastkf_ = std::move(kept_has);
+
+  // Spawn new metric landmarks from fresh left features when tracking is sparse.
+  if (static_cast<int>(track_pts_.size()) < redetect_below_)
+  {
+    const auto fresh = dist.detect(grayL, track_pts_);
+    profiler_.enter("stereo.match");
+    addStereoLandmarks(grayL, grayR, cam, baseline, fresh);
+    profiler_.leave("stereo.match");
+  }
+
+  // Keyframe decision.
+  ++frames_since_kf_;
+  mola::vision::KeyframeSelectorParams sp;
+  sp.max_frames_gap    = kf_max_frames_gap_;
+  sp.min_frames_gap    = kf_min_frames_gap_;
+  sp.min_tracked       = kf_min_tracked_;
+  sp.min_tracked_ratio = kf_min_tracked_ratio_;
+  sp.min_parallax_px   = kf_min_parallax_px_;
+  mola::vision::KeyframeSelector selector(sp);
+
+  mola::vision::KeyframeFrameStats stats;
+  stats.num_tracked      = static_cast<int>(track_pts_.size());
+  stats.ref_num_features = ref_kf_features_;
+  stats.frames_since_kf  = frames_since_kf_;
+
+  if (selector.shouldBeKeyframe(stats))
+  {
+    insertCurrentKeyframe();
+    // NOTE: windowed BA is intentionally NOT run in stereo mode yet. The shared
+    // slidingWindowBA() minimizes pure reprojection error with only the oldest
+    // pose fixed, which leaves a 1-DoF scale gauge free and slowly shrinks the
+    // metric stereo scale. Proper stereo BA (adding the right-image / disparity
+    // residual that anchors scale) is tracked as task 3.4; until then the stereo
+    // depths + PnP already give a well-constrained metric estimate.
+    frames_since_kf_ = 0;
+    publishMap(timestamp);
+  }
+
+  prev_gray_ = grayL;
+  trajectory_.push_back(pose_wc_.translation());
+  publishLocalization(timestamp);
+  {
+    mrpt::system::CTimeLoggerEntry tlv(profiler_, "viz");
+    publishViz2D(grayL);
+    publishViz3D();
+  }
+  return pose_wc_;
 }
 
 void VisualSlam::spawnTriangulatedLandmarks()

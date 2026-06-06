@@ -21,27 +21,31 @@
 
 namespace mola
 {
-/** Monocular visual SLAM front-end (stereo mode reserved for a later phase).
+/** Monocular or stereo visual SLAM front-end (`mode` = "mono" | "stereo").
  *
  *  Consumes `CObservationImage` and estimates the camera trajectory and a
  *  sparse 3D landmark map, all in MRPT 3.x types via `mola_libvision`
  *  (Shi-Tomasi detection, pyramidal LK tracking, essential-matrix two-view
- *  initialization, triangulation, robust PnP, sliding-window BA). No OpenCV,
- *  no Ceres.
+ *  initialization, stereo matching, triangulation, robust PnP, sliding-window
+ *  BA). No OpenCV, no Ceres.
  *
- *  Because a single camera gives no metric scale, the map and trajectory are
- *  expressed up to a global scale fixed by the bootstrap baseline (||t|| = 1
- *  between the two initialization keyframes).
- *
- *  Pipeline:
+ *  Monocular pipeline:
  *   - INITIALIZING: detect corners in the first frame, track them with LK; once
  *     enough parallax accumulates, estimate the essential matrix (RANSAC),
  *     recover the relative pose, and triangulate the inliers into the initial
- *     map (world frame = first camera frame).
- *   - TRACKING: track features with LK, recover the pose with robust PnP, spawn
- *     new landmarks by triangulating long-tracked features across keyframes, and
- *     refine recent keyframes + landmarks with sliding-window BA. Publishes the
- *     pose (LocalizationSourceBase) and sparse map (MapSourceBase).
+ *     map (world frame = first camera frame). The scale is arbitrary, fixed by
+ *     the bootstrap baseline (||t|| = 1 between the two init keyframes).
+ *   - TRACKING: LK + robust PnP; new landmarks by triangulating long-tracked
+ *     features across keyframes; sliding-window BA.
+ *
+ *  Stereo pipeline (`mode=stereo`): pairs the left/right image streams by
+ *  timestamp; depth comes directly from the stereo match (mola_libvision
+ *  matchStereo), so the map and trajectory are at TRUE METRIC scale from the
+ *  first frame (no essential bootstrap). LK + robust PnP for tracking; new
+ *  landmarks from the stereo depth of fresh features. (Scale-anchored stereo BA
+ *  is pending: see task 3.4, so windowed BA is currently skipped in stereo.)
+ *
+ *  Publishes the pose (LocalizationSourceBase) and sparse map (MapSourceBase).
  */
 class VisualSlam : public mola::FrontEndBase,
                    public mola::LocalizationSourceBase,
@@ -72,6 +76,14 @@ class VisualSlam : public mola::FrontEndBase,
       const mrpt::img::CImage& gray, const mrpt::img::TCamera& cam,
       const mrpt::Clock::time_point& timestamp);
 
+  /** Feeds one RECTIFIED stereo pair directly (stereo mode). Depth comes from the
+   *  stereo match, so the trajectory and map are at TRUE metric scale. \p cam is
+   *  the (rectified) left camera; \p baseline is the stereo baseline in meters.
+   *  Returns the estimated left-camera-in-world pose (T_wc). */
+  mrpt::poses::CPose3D processStereoFrame(
+      const mrpt::img::CImage& left, const mrpt::img::CImage& right, const mrpt::img::TCamera& cam,
+      double baseline, const mrpt::Clock::time_point& timestamp);
+
   mrpt::poses::CPose3D currentPose() const { return pose_wc_; }
   bool                 isInitialized() const { return state_ == State::TRACKING; }
   size_t               numLandmarks() const { return landmarks_.size(); }
@@ -94,15 +106,19 @@ class VisualSlam : public mola::FrontEndBase,
 
   // ---- parameters ----
   std::string sensor_label_;
-  std::string mode_           = "mono";  ///< "mono" (stereo: future phase)
-  int         max_features_   = 400;
-  float       min_distance_   = 12.0f;
-  int         redetect_below_ = 150;
-  int         lk_win_size_    = 21;
-  int         lk_max_levels_  = 3;
-  int         min_pnp_points_ = 12;
-  int         ba_window_size_ = 8;
-  int         cull_min_obs_   = 2;
+  std::string mode_ = "mono";  ///< "mono" or "stereo"
+  // stereo mode:
+  std::string left_label_      = "image_0";  ///< sensor label of the left image
+  std::string right_label_     = "image_1";  ///< sensor label of the right image
+  double      stereo_baseline_ = 0.537;  ///< stereo baseline [m] (default: KITTI)
+  int         max_features_    = 400;
+  float       min_distance_    = 12.0f;
+  int         redetect_below_  = 150;
+  int         lk_win_size_     = 21;
+  int         lk_max_levels_   = 3;
+  int         min_pnp_points_  = 12;
+  int         ba_window_size_  = 8;
+  int         cull_min_obs_    = 2;
   // two-view initialization:
   float init_min_parallax_px_ = 30.0f;  ///< median parallax to attempt bootstrap
   int   init_min_inliers_     = 50;  ///< min essential-matrix inliers to accept init
@@ -156,12 +172,26 @@ class VisualSlam : public mola::FrontEndBase,
   // ---- initialization buffer ----
   std::vector<mrpt::math::TPoint2Df> init_ref_pts_;  ///< feature pixels in the first frame
 
+  // ---- stereo pairing buffer (mode=stereo) ----
+  mrpt::img::CImage       pending_left_;
+  mrpt::img::CImage       pending_right_;
+  mrpt::img::TCamera      pending_left_cam_;
+  mrpt::Clock::time_point pending_left_ts_{};
+  mrpt::Clock::time_point pending_right_ts_{};
+  bool                    have_left_  = false;
+  bool                    have_right_ = false;
+
   // ---- profiling ----
   mrpt::system::CTimeLogger profiler_{true, "VisualSlam"};
 
   bool tryInitialize(const mrpt::img::CImage& gray);
   void detectInitialFeatures(const mrpt::img::CImage& gray);
   void trackAndLocalize(const mrpt::img::CImage& gray);
+  /** Stereo-match a set of left features and append valid ones as new metric
+   *  landmarks (world frame, via the current pose). Returns count added. */
+  int addStereoLandmarks(
+      const mrpt::img::CImage& left, const mrpt::img::CImage& right, const mrpt::img::TCamera& cam,
+      double baseline, const std::vector<mrpt::math::TPoint2Df>& left_feats);
   void spawnTriangulatedLandmarks();
   void insertCurrentKeyframe();
   void runWindowedBA();
