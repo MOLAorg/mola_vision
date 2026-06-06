@@ -1,0 +1,67 @@
+# -----------------------------------------------------------------------------
+#                        MOLA system definition
+# Monocular visual SLAM / odometry (mola::VisualSlam, mode=mono) from the EuRoC
+# MAV dataset (left camera, cam0).
+#
+# Notes:
+#  - Monocular => no metric scale (trajectory/map up to a global scale).
+#  - EuRoC cam0 is NOT rectified and has notable lens distortion. The two-view
+#    bootstrap and triangulation undistort points via the camera model, but PnP
+#    tracking currently uses the raw pixels (pinhole), so accuracy degrades with
+#    distortion. For best results pre-rectify, or use a low-distortion sequence.
+#
+# Usage:
+#   EUROC_BASE_DIR=/path/to/euroc  EUROC_SEQ=vicon_room1/V1_01_easy/ \
+#   mola-cli visual_slam_mono_from_euroc.yaml
+# -----------------------------------------------------------------------------
+
+modules:
+  # =====================
+  # MolaViz (ImGui GUI)
+  # =====================
+  - name: viz
+    type: ${MOLA_GUI_MODULE|mola::MolaVizImGui}
+    params: ~
+
+  # =====================
+  # EuRoC dataset input (left camera, cam0)
+  # =====================
+  - name: euroc_input
+    type: mola::EurocDataset
+    execution_rate: 40 # Hz
+    params:
+      base_dir: ${EUROC_BASE_DIR}
+      sequence: ${EUROC_SEQ|vicon_room1/V1_01_easy/}
+      time_warp_scale: ${MOLA_TIME_WARP|1.0}
+      start_paused: ${MOLA_DATASET_START_PAUSED|false}
+
+  # =====================
+  # Monocular visual SLAM front-end (cam0)
+  # =====================
+  - name: visual_slam
+    type: mola::VisualSlam
+    raw_data_source: euroc_input
+    execution_rate: 40 # Hz
+    verbosity_level: "${MOLA_VERBOSITY|INFO}"
+    params:
+      mode: mono
+      sensor_label: cam0
+      max_features: 400
+      min_distance: 12.0
+      redetect_below: 150
+      lk_win_size: 21
+      lk_max_levels: 3
+      min_pnp_points: 12
+      ba_window_size: 8
+      init_min_parallax_px: 25.0
+      init_min_inliers: 50
+      tri_min_parallax_deg: 2.0
+      kf_max_frames_gap: 15
+      kf_min_frames_gap: 2
+      kf_min_tracked: 100
+      kf_min_tracked_ratio: 0.6
+      kf_min_parallax_px: 15.0
+      publish_viz_2d: true
+      publish_viz_3d: true
+      viz2d_title: Visual SLAM (mono, EuRoC cam0)
+      viz2d_win_pos: 10 60 800 600 # [x y width height]
