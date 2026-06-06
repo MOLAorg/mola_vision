@@ -34,8 +34,63 @@ std::vector<mrpt::math::TPoint2Df> mola::vision::goodFeaturesToTrack(
   Eigen::MatrixXf Ix, Iy;
   sobelGradients(img, Ix, Iy);
 
-  // Step 2: Compute Ix², IxIy, Iy² and box-filter with kernel radius block_size
-  const int       b = params.block_size;
+  // Step 2: Compute Ix², IxIy, Iy² and box-filter with kernel radius block_size.
+  // The box filter (sum over a (2b+1)x(2b+1) window) is done separably with
+  // running column/row sums -> O(rows*cols) instead of O(rows*cols*block^2).
+  const int b = params.block_size;
+
+  Eigen::MatrixXf Sxx = Ix.array().square();
+  Eigen::MatrixXf Sxy = Ix.array() * Iy.array();
+  Eigen::MatrixXf Syy = Iy.array().square();
+
+  // Separable box sum (valid interior [b, n-b) only; borders left at 0).
+  const auto boxFilter = [&](const Eigen::MatrixXf& S) -> Eigen::MatrixXf
+  {
+    Eigen::MatrixXf H = Eigen::MatrixXf::Zero(rows, cols);  // horizontal sums
+    for (int r = 0; r < rows; ++r)
+    {
+      if (cols < 2 * b + 1)
+      {
+        continue;
+      }
+      float acc = 0.f;
+      for (int c = 0; c <= 2 * b; ++c)
+      {
+        acc += S(r, c);
+      }
+      H(r, b) = acc;
+      for (int c = b + 1; c < cols - b; ++c)
+      {
+        acc += S(r, c + b) - S(r, c - b - 1);
+        H(r, c) = acc;
+      }
+    }
+    Eigen::MatrixXf B = Eigen::MatrixXf::Zero(rows, cols);  // + vertical sums
+    for (int c = b; c < cols - b; ++c)
+    {
+      if (rows < 2 * b + 1)
+      {
+        continue;
+      }
+      float acc = 0.f;
+      for (int r = 0; r <= 2 * b; ++r)
+      {
+        acc += H(r, c);
+      }
+      B(b, c) = acc;
+      for (int r = b + 1; r < rows - b; ++r)
+      {
+        acc += H(r + b, c) - H(r - b - 1, c);
+        B(r, c) = acc;
+      }
+    }
+    return B;
+  };
+
+  const Eigen::MatrixXf Bxx = boxFilter(Sxx);
+  const Eigen::MatrixXf Bxy = boxFilter(Sxy);
+  const Eigen::MatrixXf Byy = boxFilter(Syy);
+
   Eigen::MatrixXf scores(rows, cols);
   scores.setZero();
 
@@ -43,18 +98,9 @@ std::vector<mrpt::math::TPoint2Df> mola::vision::goodFeaturesToTrack(
   {
     for (int c = b; c < cols - b; ++c)
     {
-      float Ixx = 0, Ixy = 0, Iyy = 0;
-      for (int dr = -b; dr <= b; ++dr)
-      {
-        for (int dc = -b; dc <= b; ++dc)
-        {
-          const float ix = Ix(r + dr, c + dc);
-          const float iy = Iy(r + dr, c + dc);
-          Ixx += ix * ix;
-          Ixy += ix * iy;
-          Iyy += iy * iy;
-        }
-      }
+      const float Ixx = Bxx(r, c);
+      const float Ixy = Bxy(r, c);
+      const float Iyy = Byy(r, c);
 
       float score;
       if (params.harris_k <= 0.f)
