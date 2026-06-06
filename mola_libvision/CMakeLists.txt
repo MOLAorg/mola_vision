@@ -44,8 +44,9 @@ set(LIB_SRCS
   # keyframe_selector.h is header-only (policy)
   # lm_solver.h is header-only (template)
   # Keyframe.h  is header-only (POD struct)
-  # ORB stub (kept until Phase 5):
+  # ORB descriptor + loop detector (place recognition):
   src/orb_detector.cpp
+  src/orb_loop_detector.cpp
 )
 
 set(LIB_PUBLIC_HDRS
@@ -70,6 +71,7 @@ set(LIB_PUBLIC_HDRS
   include/mola_libvision/gtsam_pose_graph_optimizer.h
   include/mola_libvision/marg_prior.h
   include/mola_libvision/orb_descriptor.h
+  include/mola_libvision/orb_loop_detector.h
 )
 
 mola_add_library(
