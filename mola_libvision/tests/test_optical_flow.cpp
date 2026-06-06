@@ -49,6 +49,133 @@ static mrpt::img::CImage translateImage(const mrpt::img::CImage& src, int dx, in
   return dst;
 }
 
+/** Non-periodic, well-textured image: smoothed random noise. Non-repeating so
+ *  there is no matching ambiguity, and smoothing yields trackable gradients. */
+static mrpt::img::CImage makeSmoothTexture(int W, int H)
+{
+  std::mt19937                          rng(12345);
+  std::uniform_real_distribution<float> uni(0.f, 255.f);
+  std::vector<float>                    buf(static_cast<size_t>(W) * H);
+  for (auto& v : buf) v = uni(rng);
+
+  // A few separable 3x3 box blurs => smooth but still locally unique.
+  std::vector<float> tmp(buf.size());
+  for (int pass = 0; pass < 4; ++pass)
+  {
+    for (int r = 0; r < H; ++r)
+    {
+      for (int c = 0; c < W; ++c)
+      {
+        const int   cl = std::max(0, c - 1), cr = std::min(W - 1, c + 1);
+        const float s  = buf[r * W + cl] + buf[r * W + c] + buf[r * W + cr];
+        tmp[r * W + c] = s / 3.f;
+      }
+    }
+    for (int r = 0; r < H; ++r)
+    {
+      for (int c = 0; c < W; ++c)
+      {
+        const int   ru = std::max(0, r - 1), rd = std::min(H - 1, r + 1);
+        const float s  = tmp[ru * W + c] + tmp[r * W + c] + tmp[rd * W + c];
+        buf[r * W + c] = s / 3.f;
+      }
+    }
+  }
+
+  // Stretch contrast so smoothed values span a usable range.
+  float lo = 1e9f, hi = -1e9f;
+  for (float v : buf)
+  {
+    lo = std::min(lo, v);
+    hi = std::max(hi, v);
+  }
+  const float scale = (hi > lo) ? 255.f / (hi - lo) : 1.f;
+
+  mrpt::img::CImage img(W, H, mrpt::img::CH_GRAY);
+  for (int r = 0; r < H; ++r)
+  {
+    uint8_t* row = img.ptrLine<uint8_t>(r);
+    for (int c = 0; c < W; ++c)
+    {
+      row[c] = static_cast<uint8_t>(std::lround((buf[r * W + c] - lo) * scale));
+    }
+  }
+  return img;
+}
+
+/** Translate a CImage by a sub-pixel (dx, dy) via bilinear resampling. */
+static mrpt::img::CImage translateImageSubpixel(const mrpt::img::CImage& src, float dx, float dy)
+{
+  const int         W = src.getWidth(), H = src.getHeight();
+  mrpt::img::CImage dst(W, H, mrpt::img::CH_GRAY);
+  for (int r = 0; r < H; ++r)
+  {
+    uint8_t* out_row = dst.ptrLine<uint8_t>(r);
+    for (int c = 0; c < W; ++c)
+    {
+      const float xs = static_cast<float>(c) - dx;
+      const float ys = static_cast<float>(r) - dy;
+      const int   x0 = static_cast<int>(std::floor(xs));
+      const int   y0 = static_cast<int>(std::floor(ys));
+      if (x0 < 0 || x0 + 1 >= W || y0 < 0 || y0 + 1 >= H)
+      {
+        out_row[c] = 0;
+        continue;
+      }
+      const float fx = xs - static_cast<float>(x0);
+      const float fy = ys - static_cast<float>(y0);
+      const auto  p  = [&](int xx, int yy)
+      { return static_cast<float>(src.ptrLine<uint8_t>(yy)[xx]); };
+      const float v = (1 - fy) * ((1 - fx) * p(x0, y0) + fx * p(x0 + 1, y0)) +
+                      fy * ((1 - fx) * p(x0, y0 + 1) + fx * p(x0 + 1, y0 + 1));
+      out_row[c] = static_cast<uint8_t>(std::lround(v));
+    }
+  }
+  return dst;
+}
+
+// ---------------------------------------------------------------------------
+// LK tracking: sub-pixel displacement (guards tracker accuracy)
+// ---------------------------------------------------------------------------
+TEST(OpticalFlow, TrackSubpixelTranslation)
+{
+  const float DX = 1.7f, DY = -0.8f;
+  auto        prev = makeSmoothTexture(160, 160);
+  auto        curr = translateImageSubpixel(prev, DX, DY);
+
+  GoodFeaturesParams dp;
+  dp.max_corners  = 60;
+  dp.min_distance = 8.f;
+  auto prev_pts   = goodFeaturesToTrack(prev, dp);
+
+  std::vector<mrpt::math::TPoint2Df> pts;
+  const int                          margin = 24;
+  for (const auto& p : prev_pts)
+  {
+    if (p.x > margin && p.x < 160 - margin && p.y > margin && p.y < 160 - margin) pts.push_back(p);
+  }
+  ASSERT_GE(pts.size(), 8u);
+
+  std::vector<mrpt::math::TPoint2Df> next_pts;
+  std::vector<TrackStatus>           status;
+  LKParams                           params;
+  params.max_levels = 3;
+  params.win_size   = 10;
+  calcOpticalFlowPyrLK(prev, curr, pts, next_pts, status, params);
+
+  int ok_count = 0;
+  for (size_t i = 0; i < pts.size(); ++i)
+  {
+    if (status[i] != TrackStatus::OK) continue;
+    ++ok_count;
+    const float ex  = next_pts[i].x - (pts[i].x + DX);
+    const float ey  = next_pts[i].y - (pts[i].y + DY);
+    const float err = std::sqrt(ex * ex + ey * ey);
+    EXPECT_LT(err, 0.5f) << "Point " << i << " sub-pixel error " << err;
+  }
+  EXPECT_GE(ok_count, static_cast<int>(pts.size()) * 7 / 10);
+}
+
 // ---------------------------------------------------------------------------
 // LK tracking: known integer displacement
 // ---------------------------------------------------------------------------
@@ -111,7 +238,7 @@ TEST(OpticalFlow, LostPointsForBlankCurr)
   calcOpticalFlowPyrLK(prev, curr, pts, next_pts, status);
 
   // All should be lost (min_eig will be too low in the blank image)
-  // OR tracked to wrong location — either way it should not crash
+  // OR tracked to wrong location; either way it should not crash
   EXPECT_EQ(next_pts.size(), pts.size());
   EXPECT_EQ(status.size(), pts.size());
 }

@@ -37,21 +37,43 @@ inline float sampleBilinear(const Eigen::MatrixXf& img, float x, float y)
          fy * ((1 - fx) * img(y1, x0) + fx * img(y1, x1));
 }
 
-/** Bilinearly sample a uint8 image at sub-pixel (x, y) → float. */
-inline float sampleBilinearU8(const mrpt::img::CImage& img, float x, float y)
+/** A lightweight, read-only view over a grayscale CImage buffer: caches the
+ *  base pointer, row stride and dimensions so each pixel access is plain
+ *  pointer arithmetic (no per-call getWidth()/ptr<>() dispatch). This is the
+ *  hot path of the LK tracker (millions of samples per frame). */
+struct GrayView
 {
-  const int   cols = img.getWidth();
-  const int   rows = img.getHeight();
-  const int   x0   = static_cast<int>(x);
-  const int   y0   = static_cast<int>(y);
-  const int   x1   = std::min(x0 + 1, cols - 1);
-  const int   y1   = std::min(y0 + 1, rows - 1);
-  const float fx   = x - static_cast<float>(x0);
-  const float fy   = y - static_cast<float>(y0);
-  auto px = [&](int xx, int yy) -> float { return static_cast<float>(*img.ptr<uint8_t>(xx, yy)); };
-  return (1 - fy) * ((1 - fx) * px(x0, y0) + fx * px(x1, y0)) +
-         fy * ((1 - fx) * px(x0, y1) + fx * px(x1, y1));
-}
+  const uint8_t* data   = nullptr;
+  int            stride = 0;  ///< bytes per row
+  int            cols   = 0;
+  int            rows   = 0;
+
+  explicit GrayView(const mrpt::img::CImage& img)
+      : data(img.ptr<uint8_t>(0, 0)),
+        stride(static_cast<int>(img.getRowStride())),
+        cols(static_cast<int>(img.getWidth())),
+        rows(static_cast<int>(img.getHeight()))
+  {
+  }
+
+  /** Bilinear sample (identical clamping/formula to sampleBilinearU8). */
+  inline float at(float x, float y) const
+  {
+    const int      x0  = static_cast<int>(x);
+    const int      y0  = static_cast<int>(y);
+    const int      x1  = std::min(x0 + 1, cols - 1);
+    const int      y1  = std::min(y0 + 1, rows - 1);
+    const float    fx  = x - static_cast<float>(x0);
+    const float    fy  = y - static_cast<float>(y0);
+    const uint8_t* r0  = data + static_cast<size_t>(y0) * stride;
+    const uint8_t* r1  = data + static_cast<size_t>(y1) * stride;
+    const float    p00 = r0[x0];
+    const float    p10 = r0[x1];
+    const float    p01 = r1[x0];
+    const float    p11 = r1[x1];
+    return (1 - fy) * ((1 - fx) * p00 + fx * p10) + fy * ((1 - fx) * p01 + fx * p11);
+  }
+};
 
 /** Track a single point from level 'prev' to 'curr' using iterative LK.
  *  On entry,  (px, py) = predicted position in curr at this level.
@@ -64,17 +86,25 @@ bool lkTrackPoint(
     float& px_curr, float& py_curr,  ///< in/out in curr
     const LKParams& params)
 {
-  const int cols = prev_img.getWidth();
-  const int rows = prev_img.getHeight();
-  const int W    = params.win_size;
+  const GrayView prev_view(prev_img);
+  const GrayView curr_view(curr_img);
+  const int      cols = prev_view.cols;
+  const int      rows = prev_view.rows;
+  const int      W    = params.win_size;
 
   // Precompute gradient patch around (px_prev, py_prev) in prev_img
-  // using finite differences on the float-sampled image
+  // using finite differences on the float-sampled image.
   float Gxx = 0, Gxy = 0, Gyy = 0;
 
-  // Collect patch intensities and gradients in prev
-  const int          patch_size = (2 * W + 1) * (2 * W + 1);
-  std::vector<float> Ix_patch(patch_size), Iy_patch(patch_size), I_prev_patch(patch_size);
+  // Collect patch intensities and gradients in prev. Reuse thread-local buffers
+  // to avoid a heap allocation on every (point, pyramid-level) call.
+  const int                              patch_size = (2 * W + 1) * (2 * W + 1);
+  static thread_local std::vector<float> Ix_patch;
+  static thread_local std::vector<float> Iy_patch;
+  static thread_local std::vector<float> I_prev_patch;
+  Ix_patch.resize(patch_size);
+  Iy_patch.resize(patch_size);
+  I_prev_patch.resize(patch_size);
 
   int idx = 0;
   for (int dy = -W; dy <= W; ++dy)
@@ -84,18 +114,16 @@ bool lkTrackPoint(
       const float x = px_prev + static_cast<float>(dx);
       const float y = py_prev + static_cast<float>(dy);
 
-      if (x < 1 || x >= cols - 1 || y < 1 || y >= rows - 1)
+      if (x < 1 || x >= static_cast<float>(cols - 1) || y < 1 || y >= static_cast<float>(rows - 1))
       {
         Ix_patch[idx] = Iy_patch[idx] = I_prev_patch[idx] = 0.f;
         continue;
       }
 
-      I_prev_patch[idx] = sampleBilinearU8(prev_img, x, y);
+      I_prev_patch[idx] = prev_view.at(x, y);
       // Central differences for gradient
-      Ix_patch[idx] =
-          0.5f * (sampleBilinearU8(prev_img, x + 1, y) - sampleBilinearU8(prev_img, x - 1, y));
-      Iy_patch[idx] =
-          0.5f * (sampleBilinearU8(prev_img, x, y + 1) - sampleBilinearU8(prev_img, x, y - 1));
+      Ix_patch[idx] = 0.5f * (prev_view.at(x + 1, y) - prev_view.at(x - 1, y));
+      Iy_patch[idx] = 0.5f * (prev_view.at(x, y + 1) - prev_view.at(x, y - 1));
 
       Gxx += Ix_patch[idx] * Ix_patch[idx];
       Gxy += Ix_patch[idx] * Iy_patch[idx];
@@ -107,30 +135,64 @@ bool lkTrackPoint(
   const float trace   = Gxx + Gyy;
   const float disc    = std::sqrt(std::max(0.f, (Gxx - Gyy) * (Gxx - Gyy) + 4.f * Gxy * Gxy));
   const float min_eig = (trace - disc) * 0.5f;
-  if (min_eig < params.min_eig_threshold * static_cast<float>(patch_size)) return false;
+  if (min_eig < params.min_eig_threshold * static_cast<float>(patch_size))
+  {
+    return false;
+  }
 
   // Iterative refinement
   const float det = Gxx * Gyy - Gxy * Gxy;
-  if (std::abs(det) < 1e-12f) return false;
+  if (std::abs(det) < 1e-12f)
+  {
+    return false;
+  }
   const float inv_det = 1.f / det;
+
+  const float fcols = static_cast<float>(cols - 1);
+  const float frows = static_cast<float>(rows - 1);
 
   for (int iter = 0; iter < params.max_iters; ++iter)
   {
-    // Build mismatch vector b = Σ(It * Ix, It * Iy) where It = Iprev - Icurr
+    // Build mismatch vector b = Σ(It * Ix, It * Iy) where It = Iprev - Icurr.
     float bx = 0, by = 0;
     idx = 0;
-    for (int dy = -W; dy <= W; ++dy)
+
+    // Fast path: the whole patch is inside the image, so we can skip the
+    // per-pixel bounds test (identical result to the checked path below).
+    const bool fully_in =
+        px_curr - static_cast<float>(W) >= 0.f && px_curr + static_cast<float>(W) < fcols &&
+        py_curr - static_cast<float>(W) >= 0.f && py_curr + static_cast<float>(W) < frows;
+    if (fully_in)
     {
-      for (int dx = -W; dx <= W; ++dx, ++idx)
+      for (int dy = -W; dy <= W; ++dy)
       {
-        const float xc = px_curr + static_cast<float>(dx);
         const float yc = py_curr + static_cast<float>(dy);
+        for (int dx = -W; dx <= W; ++dx, ++idx)
+        {
+          const float xc = px_curr + static_cast<float>(dx);
+          const float It = I_prev_patch[idx] - curr_view.at(xc, yc);
+          bx += It * Ix_patch[idx];
+          by += It * Iy_patch[idx];
+        }
+      }
+    }
+    else
+    {
+      for (int dy = -W; dy <= W; ++dy)
+      {
+        for (int dx = -W; dx <= W; ++dx, ++idx)
+        {
+          const float xc = px_curr + static_cast<float>(dx);
+          const float yc = py_curr + static_cast<float>(dy);
 
-        if (xc < 0 || xc >= cols - 1 || yc < 0 || yc >= rows - 1) continue;
-
-        const float It = I_prev_patch[idx] - sampleBilinearU8(curr_img, xc, yc);
-        bx += It * Ix_patch[idx];
-        by += It * Iy_patch[idx];
+          if (xc < 0 || xc >= fcols || yc < 0 || yc >= frows)
+          {
+            continue;
+          }
+          const float It = I_prev_patch[idx] - curr_view.at(xc, yc);
+          bx += It * Ix_patch[idx];
+          by += It * Iy_patch[idx];
+        }
       }
     }
 
@@ -141,7 +203,10 @@ bool lkTrackPoint(
     px_curr += vx;
     py_curr += vy;
 
-    if (std::sqrt(vx * vx + vy * vy) < params.eps) break;
+    if (std::sqrt(vx * vx + vy * vy) < params.eps)
+    {
+      break;
+    }
   }
 
   // Bounds check
