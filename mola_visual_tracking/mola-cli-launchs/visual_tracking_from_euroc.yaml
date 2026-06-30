@@ -15,7 +15,8 @@ modules:
   # =====================
   - name: viz
     type: ${MOLA_GUI_MODULE|mola::MolaVizImGui}
-    params: ~
+    params:
+      imgui_app_name: visual_tracking_from_euroc
 
   # =====================
   # EuRoC dataset input
