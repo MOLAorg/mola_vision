@@ -11,9 +11,10 @@ modules:
   # MolaViz
   # =====================
   - name: viz
-    type: mola::MolaViz
+    type: ${MOLA_GUI_MODULE|mola::MolaVizImGui}
     verbosity_level: "${MOLA_VERBOSITY_MOLA_VIZ|INFO}"
-    params: ~ # none
+    params:
+      imgui_app_name: visual_stereo_odometry_from_kitti
 
   # Offline or online sensory data sources =====================
   # =====================
