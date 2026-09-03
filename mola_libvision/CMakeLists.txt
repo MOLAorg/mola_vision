@@ -88,6 +88,8 @@ mola_add_library(
     mola_common
     mrpt_img
     mrpt_poses
+    Eigen3
+    TBB
 )
 
 # GTSAM is an IMPLEMENTATION detail (GtsamPoseGraphOptimizer is pimpl, no GTSAM
