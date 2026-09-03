@@ -7,7 +7,8 @@
 | ROS 2 Humble (u22.04) | [![Build Status](https://build.ros2.org/job/Hdev__mola_vision__ubuntu_jammy_amd64/badge/icon)](https://build.ros2.org/job/Hdev__mola_vision__ubuntu_jammy_amd64/) | [![Version](https://img.shields.io/ros/v/humble/mola_vision)](https://index.ros.org/?search_packages=true&pkgs=mola_vision) |
 | ROS 2 Jazzy (u24.04) | [![Build Status](https://build.ros2.org/job/Jdev__mola_vision__ubuntu_noble_amd64/badge/icon)](https://build.ros2.org/job/Jdev__mola_vision__ubuntu_noble_amd64/) | [![Version](https://img.shields.io/ros/v/jazzy/mola_vision)](https://index.ros.org/?search_packages=true&pkgs=mola_vision) |
 | ROS 2 Kilted (u24.04) | [![Build Status](https://build.ros2.org/job/Kdev__mola_vision__ubuntu_noble_amd64/badge/icon)](https://build.ros2.org/job/Kdev__mola_vision__ubuntu_noble_amd64/) | [![Version](https://img.shields.io/ros/v/kilted/mola_vision)](https://index.ros.org/?search_packages=true&pkgs=mola_vision) |
-| ROS 2 Rolling (u24.04) | [![Build Status](https://build.ros2.org/job/Rdev__mola_vision__ubuntu_noble_amd64/badge/icon)](https://build.ros2.org/job/Rdev__mola_vision__ubuntu_noble_amd64/) | [![Version](https://img.shields.io/ros/v/rolling/mola_vision)](https://index.ros.org/?search_packages=true&pkgs=mola_vision) |
+| ROS 2 Lyrical (u26.04) | [![Build Status](https://build.ros2.org/job/Ldev__mola_vision__ubuntu_resolute_amd64/badge/icon)](https://build.ros2.org/job/Ldev__mola_vision__ubuntu_resolute_amd64/) | [![Version](https://img.shields.io/ros/v/lyrical/mola_vision)](https://index.ros.org/?search_packages=true&pkgs=mola_vision) |
+| ROS 2 Rolling (u26.04) | [![Build Status](https://build.ros2.org/job/Rdev__mola_vision__ubuntu_resolute_amd64/badge/icon)](https://build.ros2.org/job/Rdev__mola_vision__ubuntu_resolute_amd64/) | [![Version](https://img.shields.io/ros/v/rolling/mola_vision)](https://index.ros.org/?search_packages=true&pkgs=mola_vision) |
 
 
 # mola_vision
