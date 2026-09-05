@@ -59,6 +59,36 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+# CLI app
+# ---------------------------------
+find_package(mola_input_kitti_dataset) # optional
+find_package(mola_input_rosbag1) # optional
+find_package(CLI11 REQUIRED)
+
+mola_add_executable(
+  TARGET  mola-visual-slam-cli
+  SOURCES apps/mola-visual-slam-cli.cpp
+  LINK_LIBRARIES
+    ${PROJECT_NAME}
+    CLI11::CLI11
+)
+
+if(mola_input_kitti_dataset_FOUND)
+  message(STATUS "mola-visual-slam-cli: With Kitti = YES")
+  target_link_libraries(mola-visual-slam-cli mola::mola_input_kitti_dataset)
+  target_compile_definitions(mola-visual-slam-cli PRIVATE HAVE_MOLA_INPUT_KITTI)
+else()
+  message(STATUS "mola-visual-slam-cli: With Kitti = NO")
+endif()
+
+if(mola_input_rosbag1_FOUND)
+  message(STATUS "mola-visual-slam-cli: With rosbag1 = YES")
+  target_link_libraries(mola-visual-slam-cli mola::mola_input_rosbag1)
+  target_compile_definitions(mola-visual-slam-cli PRIVATE HAVE_MOLA_INPUT_ROSBAG1)
+else()
+  message(STATUS "mola-visual-slam-cli: With rosbag1 = NO")
+endif()
+
 # Unit tests:
 enable_testing()
 add_subdirectory(tests)
