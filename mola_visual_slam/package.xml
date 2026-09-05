@@ -23,11 +23,23 @@
   <depend>mrpt_img</depend>
   <depend>mrpt_maps</depend>
   <depend>mrpt_viz</depend>
+  <depend>cli11</depend>
 
   <!-- Runtime modules used by the demo launch files -->
   <exec_depend>mola_viz</exec_depend>
   <exec_depend>mola_input_video</exec_depend>
   <exec_depend>mola_launcher</exec_depend>
+
+  <!-- mola-visual-slam-cli's dataset input sources (both optional; CMakeLists.txt
+       uses find_package() without REQUIRED for both) -->
+  <depend>mola_input_kitti_dataset</depend>
+
+  <!-- mola_input_rosbag1 is genuinely optional (not yet released as a binary
+       package on every ROS distro/channel combination), so it is deliberately
+       NOT declared as a dependency here: rosdep would fail to resolve it on
+       channels where it is absent, breaking CI/install for everyone else.
+       CMake still picks it up automatically if present in the workspace or
+       underlay. Install it manually to enable the CLI's rosbag1 input. -->
 
   <test_depend>ament_cmake_gtest</test_depend>
 

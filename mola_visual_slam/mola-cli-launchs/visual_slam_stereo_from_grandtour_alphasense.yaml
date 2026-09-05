@@ -4,13 +4,17 @@
 # Alphasense rig (front_left / front_right, the narrow-baseline mono pair --
 # NOT front_center/left/right, which are wide-FOV RGB cameras). Camera
 # intrinsics (fisheye/equidistant) are read automatically from each topic's own
-# sensor_msgs/CameraInfo message; only the (fixed, per-rig) extrinsics and
-# stereo baseline are given here, since the alphasense.bag's /tf_static has no
-# per-camera frames -- see leggedrobotics/grand_tour_box's
-# box_calibration/.../calibration/tf/calibration_latest_IMU.yaml, which this
-# file's fixed_sensor_pose values were derived from (box_base_to_alphasense_base
-# composed with alphasense_base_to_alphasense_front_right; front_left coincides
-# with alphasense_base itself).
+# sensor_msgs/CameraInfo message; the (fixed, per-rig) sensor poses and the
+# front_left->front_right extrinsic are given here, since the alphasense.bag's
+# /tf_static has no per-camera frames and its camera_info is unrectified (no
+# baseline term) -- see leggedrobotics/grand_tour_box's
+# box_calibration/.../calibration/tf/calibration_latest_IMU.yaml, which both
+# this file's fixed_sensor_pose values and right_camera_pose were derived from
+# (box_base_to_alphasense_base composed with
+# alphasense_base_to_alphasense_front_right; front_left coincides with
+# alphasense_base itself). right_camera_pose makes VisualSlam rectify every
+# pair (mrpt::img::CStereoRectifyMap) before matching, since the raw pair is
+# neither epipolar-aligned nor sharing one camera's intrinsics.
 #
 # Usage:
 #   MOLA_INPUT_ROSBAG1=/path/to/<mission>_alphasense.bag \
@@ -66,14 +70,15 @@ modules:
       mode: stereo
       left_label: image_0
       right_label: image_1
-      # alphasense front_left<->front_right baseline (m), from the same
-      # calibration file as the fixed_sensor_pose values above. NOTE: unlike
-      # KITTI's image_0/image_1, these images are NOT pre-rectified (the
-      # bag's own camera_info has R=identity), and the two optical axes are
-      # not perfectly parallel (~1 deg relative yaw/pitch/roll) -- matchStereo's
-      # epipolar assumption is only approximately satisfied. Revisit with a
-      # proper CStereoRectifyMap pass if match yield is poor.
-      stereo_baseline: ${GRANDTOUR_ALPHASENSE_BASELINE|0.11050}
+      # Unlike KITTI's image_0/image_1, these images are NOT pre-rectified
+      # (the bag's own camera_info has R=identity) and the two optical axes
+      # are not perfectly parallel. right_camera_pose (front_left ->
+      # front_right, same calibration source as the fixed_sensor_pose values
+      # above) makes onNewObservation() build a CStereoRectifyMap and rectify
+      # every pair before processStereoFrame() - stereo_baseline itself is
+      # then derived automatically from the rectified geometry, not needed
+      # here.
+      right_camera_pose: "-0.110496 0.000295 -0.000613 -1.1697 -0.1188 -0.0327"
       max_features: 500
       min_distance: 12.0
       redetect_below: 200
