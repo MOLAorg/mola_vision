@@ -59,6 +59,13 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+# Install standalone module parameter files, for running this module as an
+# additional front-end from another app (mola-lidar-odometry-cli --module):
+install(
+  DIRECTORY params
+  DESTINATION share/${PROJECT_NAME}
+)
+
 # CLI app
 # ---------------------------------
 find_package(mola_input_kitti_dataset) # optional

@@ -1,0 +1,54 @@
+# -----------------------------------------------------------------------------
+# mola::VisualSlam as an ADDITIONAL front-end, for the offline batch runner:
+#
+#   mola-lidar-odometry-cli -c <lidar-pipeline.yaml> --kitti-seq 00 \
+#     -l libmola_state_estimation_smoother.so,libmola_visual_slam.so \
+#     --state-estimator mola::state_estimation_smoother::StateEstimationSmoother \
+#     --state-estimator-param-file <state-estimation-smoother.yaml> \
+#     --module mola::VisualSlam \
+#     --module-param-file visual-slam-stereo-kitti.yaml \
+#     --output-tum-path out.tum
+#
+# The same file shape works from a mola-cli launch file, where these keys sit
+# under the module's own `params:` entry. Tuned for KITTI's rectified pair; for
+# an unrectified rig set `right_camera_pose` instead of `stereo_baseline`.
+# -----------------------------------------------------------------------------
+
+params:
+  mode: stereo
+  left_label: image_0
+  right_label: image_1
+  # KITTI's image_0/image_1 are already rectified and share one pinhole model,
+  # so the baseline is all that is needed here.
+  stereo_baseline: ${KITTI_STEREO_BASELINE|0.537}
+
+  max_features: 500
+  min_distance: 12.0
+  redetect_below: 200
+  lk_win_size: 21
+  lk_max_levels: 3
+  min_pnp_points: 12
+  kf_max_frames_gap: 10
+  kf_min_frames_gap: 2
+  kf_min_tracked: 120
+  kf_min_tracked_ratio: 0.6
+
+  # Push each visual pose into the state estimator, which is what makes this a
+  # second source rather than a parallel, unused estimate. The camera-on-robot
+  # extrinsic comes from the dataset itself and rides on each observation, so
+  # what is fused is the VEHICLE's pose and not the camera's.
+  fuse_into_state_estimator: true
+  # Its own frame: the estimator solves for the transform to {map} instead of
+  # assuming this source agrees with the LiDAR about where the origin is.
+  state_estimator_frame_id: "${MOLA_VO_FRAME_ID|visual_odom}"
+  # Per-frame quality of ONE visual pose, not the drift of the whole
+  # trajectory. Visual odometry drifts, so also list this frame id in the
+  # smoother's `relative_factors_frame_ids_re` (MOLA_RELATIVE_FACTORS_FRAMES):
+  # then these sigmas describe one increment, which is what the source knows,
+  # and can be tightened accordingly.
+  fuse_sigma_xyz: ${MOLA_VO_SIGMA_XYZ|0.10}
+  fuse_sigma_angles_deg: ${MOLA_VO_SIGMA_ANG_DEG|0.5}
+  fuse_decimation: ${MOLA_VO_FUSE_DECIMATION|1}
+
+  publish_viz_2d: false
+  publish_viz_3d: false
