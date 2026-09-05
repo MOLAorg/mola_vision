@@ -8,6 +8,7 @@
 #include <mola_kernel/interfaces/FrontEndBase.h>
 #include <mola_kernel/interfaces/LocalizationSourceBase.h>
 #include <mola_kernel/interfaces/MapSourceBase.h>
+#include <mola_kernel/interfaces/NavStateFilter.h>
 #include <mrpt/img/CImage.h>
 #include <mrpt/img/CStereoRectifyMap.h>
 #include <mrpt/img/TCamera.h>
@@ -109,6 +110,13 @@ class VisualSlam : public mola::FrontEndBase,
    *  currentRobotPose() is really a body pose and not the camera's. */
   [[nodiscard]] bool hasRobotExtrinsics() const { return camera_pose_on_robot_.has_value(); }
 
+  /** Whether a state-estimation module was found and is being fed with this
+   *  module's pose estimates. */
+  [[nodiscard]] bool isFusingIntoStateEstimator() const { return nav_state_filter_ != nullptr; }
+
+  /** How many poses have been handed to the state estimator so far. */
+  [[nodiscard]] size_t numFusedPoses() const { return num_fused_poses_; }
+
   bool   isInitialized() const { return state_ == State::TRACKING; }
   size_t numLandmarks() const { return landmarks_.size(); }
   size_t numActiveLandmarks() const;
@@ -154,6 +162,28 @@ class VisualSlam : public mola::FrontEndBase,
    *  no adjustment here. */
   bool left_image_rotate_180_  = false;
   bool right_image_rotate_180_ = false;
+
+  /** \name Fusion into a state-estimation module
+   *  When a mola::NavStateFilter module exists in the same MOLA system, each
+   *  localized frame's VEHICLE pose is handed to it as an independent odometry
+   *  source, under its own frame_id, so it can be fused with LiDAR odometry,
+   *  IMU and GNSS. Requires the camera-on-robot extrinsic: feeding the camera's
+   *  own trajectory instead would make the estimator absorb the lever arm into
+   *  a constant frame transform, which is wrong the moment the vehicle rotates.
+   *  @{ */
+  bool        fuse_into_state_estimator_ = true;
+  std::string state_estimator_frame_id_  = "visual_odom";
+  /** Sigmas of one fused pose. These describe the LOCAL quality of a single
+   *  visual pose measurement (as the ICP covariance does for LiDAR odometry),
+   *  not the accumulated drift of the whole trajectory: the estimator solves
+   *  for this source's frame transform separately. */
+  double fuse_sigma_xyz_        = 0.05;  //!< [m]
+  double fuse_sigma_angles_deg_ = 0.5;  //!< [deg]
+  /** Feed only one out of every N localized frames. Visual odometry typically
+   *  runs far faster than a LiDAR, and one keyframe per scan period is plenty
+   *  to constrain the estimator. */
+  int fuse_decimation_ = 1;
+  /** @} */
   /** Left camera pose on the vehicle ("x y z yaw_deg pitch_deg roll_deg"),
    *  overriding whatever the incoming observations carry in their
    *  \c cameraPose field. Only used to report body-frame poses; it has no
@@ -254,12 +284,24 @@ class VisualSlam : public mola::FrontEndBase,
   // ---- extrinsics for reporting body-frame poses ----
   std::optional<mrpt::poses::CPose3D> camera_pose_on_robot_;  ///< T_body_leftcam
 
+  // ---- fusion into a state-estimation module ----
+  std::shared_ptr<mola::NavStateFilter> nav_state_filter_;
+  size_t                                num_fused_poses_      = 0;
+  int                                   fuse_frame_counter_   = 0;
+  bool                                  warned_no_extrinsics_ = false;
+
   // ---- profiling ----
   mrpt::system::CTimeLogger profiler_{true, "VisualSlam"};
 
   /** Latches the camera-on-robot extrinsic from an incoming observation, if it
    *  is not already known from the \c camera_pose_on_robot parameter. */
   void rememberCameraPoseOnRobot(const mrpt::poses::CPose3D& p);
+
+  /** Hands the current vehicle pose to the state-estimation module, if one was
+   *  found. No-op unless the frame was actually localized this time (a
+   *  dead-reckoned pose carries no new information and must not be fed back as
+   *  a measurement). */
+  void fuseIntoStateEstimator(const mrpt::Clock::time_point& timestamp, bool localized);
   bool tryInitialize(const mrpt::img::CImage& gray);
   void detectInitialFeatures(const mrpt::img::CImage& gray);
   /** Constant-velocity extrapolation of the camera-in-world pose. */

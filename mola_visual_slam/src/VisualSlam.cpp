@@ -127,6 +127,11 @@ void VisualSlam::initialize_frontend(const Yaml& c)
     getS("camera_pose_on_robot", camera_pose_on_robot_str_);
     getB("left_image_rotate_180", left_image_rotate_180_);
     getB("right_image_rotate_180", right_image_rotate_180_);
+    getB("fuse_into_state_estimator", fuse_into_state_estimator_);
+    getS("state_estimator_frame_id", state_estimator_frame_id_);
+    getD("fuse_sigma_xyz", fuse_sigma_xyz_);
+    getD("fuse_sigma_angles_deg", fuse_sigma_angles_deg_);
+    getI("fuse_decimation", fuse_decimation_);
     getI("max_features", max_features_);
     getF("min_distance", min_distance_);
     getI("redetect_below", redetect_below_);
@@ -175,6 +180,32 @@ void VisualSlam::initialize_frontend(const Yaml& c)
         "VisualSlam: camera_pose_on_robot set (" << *camera_pose_on_robot_
                                                  << "); poses will be reported in the body frame.");
   }
+  // Attach to a state-estimation module, if this MOLA system has one, so the
+  // visual poses can be fused with the other odometry sources. Optional: this
+  // module is perfectly usable standalone (tests, mola-visual-slam-cli), where
+  // there is no name server at all.
+  if (fuse_into_state_estimator_ && nameServer_)
+  {
+    auto mods = findService<mola::NavStateFilter>();
+    if (!mods.empty())
+    {
+      nav_state_filter_ = std::dynamic_pointer_cast<mola::NavStateFilter>(mods[0]);
+    }
+    if (nav_state_filter_)
+    {
+      MRPT_LOG_INFO_STREAM(
+          "VisualSlam: found a state-estimation module; visual poses will be fused as odometry "
+          "source '"
+          << state_estimator_frame_id_ << "' (1 of every " << std::max(1, fuse_decimation_)
+          << " localized frames).");
+    }
+    else
+    {
+      MRPT_LOG_INFO(
+          "VisualSlam: no mola::NavStateFilter module in this system; running standalone.");
+    }
+  }
+
   MRPT_LOG_INFO_STREAM("VisualSlam initialized (mode=" << mode_ << ").");
   MRPT_END
 }
@@ -308,6 +339,48 @@ void VisualSlam::rememberCameraPoseOnRobot(const mrpt::poses::CPose3D& p)
   MRPT_LOG_INFO_STREAM(
       "VisualSlam: camera-on-robot extrinsic taken from the observations ("
       << p << "); poses will be reported in the body frame.");
+}
+
+void VisualSlam::fuseIntoStateEstimator(const mrpt::Clock::time_point& timestamp, bool localized)
+{
+  if (!nav_state_filter_ || state_ != State::TRACKING || !localized)
+  {
+    return;
+  }
+  if (!camera_pose_on_robot_)
+  {
+    // Fusing the CAMERA trajectory into an estimator whose other sources are
+    // body-frame would let it absorb the camera lever arm into the constant
+    // {map}->{visual_odom} transform, which is only valid while the vehicle
+    // does not rotate. Refuse rather than corrupt the estimate silently.
+    if (!warned_no_extrinsics_)
+    {
+      warned_no_extrinsics_ = true;
+      MRPT_LOG_ERROR(
+          "VisualSlam: cannot fuse into the state estimator without the camera-on-robot "
+          "extrinsic. Provide it via the dataset's /tf, a fixed_sensor_pose, or the "
+          "'camera_pose_on_robot' parameter.");
+    }
+    return;
+  }
+  const int dec = std::max(1, fuse_decimation_);
+  if ((fuse_frame_counter_++ % dec) != 0)
+  {
+    return;
+  }
+
+  mrpt::poses::CPose3DPDFGaussian p;
+  p.mean = currentRobotPose();
+  p.cov.setZero();
+  const double s2xyz = fuse_sigma_xyz_ * fuse_sigma_xyz_;
+  const double s2ang = mrpt::square(mrpt::DEG2RAD(fuse_sigma_angles_deg_));
+  for (int i = 0; i < 3; ++i)
+  {
+    p.cov(i, i)         = s2xyz;
+    p.cov(i + 3, i + 3) = s2ang;
+  }
+  nav_state_filter_->fuse_pose(timestamp, p, state_estimator_frame_id_);
+  ++num_fused_poses_;
 }
 
 mrpt::poses::CPose3D VisualSlam::currentPose() const
@@ -463,6 +536,9 @@ mrpt::poses::CPose3D VisualSlam::processFrame(
   prev_gray_ = gray;
   trajectory_.push_back(pose_wc_.translation());
   publishLocalization(timestamp);
+  // Only a frame that was actually localized carries new information; a
+  // dead-reckoned one would feed the estimator its own prediction back.
+  fuseIntoStateEstimator(timestamp, frames_without_pose_ == 0);
   {
     mrpt::system::CTimeLoggerEntry t6(profiler_, "viz");
     publishViz2D(gray);
@@ -1055,6 +1131,7 @@ mrpt::poses::CPose3D VisualSlam::processStereoFrame(
   prev_gray_ = grayL;
   trajectory_.push_back(pose_wc_.translation());
   publishLocalization(timestamp);
+  fuseIntoStateEstimator(timestamp, frames_without_pose_ == 0);
   {
     mrpt::system::CTimeLoggerEntry tlv(profiler_, "viz");
     publishViz2D(grayL);

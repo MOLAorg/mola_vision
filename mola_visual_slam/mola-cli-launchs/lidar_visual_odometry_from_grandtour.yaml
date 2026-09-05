@@ -1,0 +1,148 @@
+# -----------------------------------------------------------------------------
+#                        MOLA system definition
+# LiDAR odometry AND stereo visual odometry, fused in the state-estimation
+# smoother, from the GrandTour dataset (legged robot, Boxi payload).
+#
+# Data flow:
+#   /boxi/hesai/points_undistorted --> mola::LidarOdometry --+
+#   /boxi/adis/imu ------------------------------------------+--> Smoother
+#   alphasense front_left/front_right --> mola::VisualSlam --+
+#
+# Unlike this package's alphasense-only launch file, this one replays the
+# mission's <mission>_tf_model.bag alongside the sensor bags, so every sensor
+# pose (including the two alphasense cameras) resolves from the dataset's own
+# /tf_static instead of hard-coded values.
+#
+# base_link is `box_base`, NOT `base`: every GrandTour ground-truth stream is
+# anchored to a sensor mount on the payload (box_base == cpt7_imu), so running
+# in that frame makes the estimated trajectory directly comparable to the
+# mission's gt.tum with no lever-arm correction.
+#
+# Usage:
+#   MOLA_INPUT_ROSBAG1=<mission>_hesai_undist.bag \
+#   MOLA_INPUT_ROSBAG1_2=<mission>_alphasense.bag \
+#   MOLA_INPUT_ROSBAG1_3=<mission>_tf_model.bag \
+#   MOLA_INPUT_ROSBAG1_4=<mission>_adis.bag \
+#   MOLA_SAVE_TRAJECTORY=true MOLA_TUM_TRAJECTORY_OUTPUT=out.tum \
+#   mola-cli lidar_visual_odometry_from_grandtour.yaml
+#
+# Set MOLA_WITH_VISUAL_ODOM=false for the LiDAR-only A/B baseline.
+# -----------------------------------------------------------------------------
+
+modules:
+  # =====================
+  # MolaViz
+  # =====================
+  - name: viz
+    type: ${MOLA_GUI_MODULE|mola::MolaVizImGui}
+    enabled: ${MOLA_WITH_GUI|true}
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_VIZ|INFO}"
+    params:
+      imgui_app_name: lidar_visual_odometry_from_grandtour
+
+  # =====================
+  # LiDAR odometry front-end
+  # =====================
+  - name: lidar_odom
+    type: mola::LidarOdometry
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_LO|INFO}"
+    raw_data_source: "dataset_input"
+    params: "${MOLA_ODOMETRY_PIPELINE_YAML|../../../mola_lidar_odometry/pipelines/lidar3d-default.yaml}"
+
+  # =====================
+  # Stereo visual odometry front-end
+  # =====================
+  - name: visual_slam
+    type: mola::VisualSlam
+    enabled: ${MOLA_WITH_VISUAL_ODOM|true}
+    raw_data_source: "dataset_input"
+    execution_rate: 20 # Hz
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_VO|INFO}"
+    params:
+      mode: stereo
+      left_label: image_0
+      right_label: image_1
+      # The raw alphasense pair is fisheye and NOT epipolar-aligned, so it is
+      # rectified on the fly from this extrinsic plus each camera's own
+      # CameraInfo. Value from the mission's own tf_model.bag /tf_static
+      # (alphasense_base -> front_left|front_right), x POSITIVE because the
+      # right camera sits to the right of the left one.
+      right_camera_pose: "${MOLA_VO_RIGHT_CAM_POSE|0.110078 -0.000468 -0.001201 -1.1752 0.1992 0.0244}"
+      # Some missions ship one stream 180 deg rotated while their camera_info
+      # still describes the upright image (arc-3's front_left does).
+      left_image_rotate_180: ${MOLA_VO_LEFT_ROTATE_180|false}
+      right_image_rotate_180: ${MOLA_VO_RIGHT_ROTATE_180|false}
+      max_features: 500
+      min_distance: 12.0
+      redetect_below: 200
+      lk_win_size: 21
+      lk_max_levels: 3
+      min_pnp_points: 12
+      kf_max_frames_gap: 10
+      kf_min_frames_gap: 2
+      kf_min_tracked: 120
+      kf_min_tracked_ratio: 0.6
+      fuse_into_state_estimator: true
+      state_estimator_frame_id: "${MOLA_VO_FRAME_ID|visual_odom}"
+      fuse_sigma_xyz: ${MOLA_VO_SIGMA_XYZ|0.10}
+      fuse_sigma_angles_deg: ${MOLA_VO_SIGMA_ANG_DEG|0.5}
+      fuse_decimation: ${MOLA_VO_FUSE_DECIMATION|1}
+      publish_viz_2d: ${MOLA_WITH_GUI|true}
+      publish_viz_3d: false
+      viz2d_title: Visual odometry (stereo, GrandTour alphasense)
+      viz2d_win_pos: 10 60 1000 350 # [x y width height]
+
+  # =====================
+  # State estimation: the smoother, which is what fuses the two front-ends
+  # =====================
+  - name: state_estimation
+    type: "${MOLA_STATE_ESTIMATOR|mola::state_estimation_smoother::StateEstimationSmoother}"
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_STATE_ESTIMATOR|INFO}"
+    raw_data_source: "dataset_input"
+    params: "${MOLA_STATE_ESTIMATOR_YAML|../../../mola_state_estimation/mola_state_estimation_smoother/params/state-estimation-smoother.yaml}"
+
+  # =========================
+  # Offline dataset source: the mission's per-topic bags, replayed as one stream
+  # =========================
+  - name: dataset_input
+    type: mola::Rosbag1Dataset
+    verbosity_level: "${MOLA_VERBOSITY_ROSBAG1|INFO}"
+    execution_rate: 50 # Hz
+    quit_mola_app_on_dataset_end: ${MOLA_QUIT_ON_DATASET_END|true}
+
+    gui_preview_sensors:
+      - raw_sensor_label: "lidar"
+        decimation: 1
+        enabled: ${MOLA_WITH_GUI|true}
+        win_pos: 5 5 400 400
+
+    params:
+      rosbag_filename:
+        - ${MOLA_INPUT_ROSBAG1}
+        - ${MOLA_INPUT_ROSBAG1_2|}
+        - ${MOLA_INPUT_ROSBAG1_3|}
+        - ${MOLA_INPUT_ROSBAG1_4|}
+        - ${MOLA_INPUT_ROSBAG1_5|}
+      time_warp_scale: ${MOLA_TIME_WARP|1.0}
+      start_paused: ${MOLA_DATASET_START_PAUSED|false}
+      base_link_frame_id: "${MOLA_TF_BASE_LINK|box_base}"
+
+      sensors:
+        - topic: ${MOLA_LIDAR_TOPIC|/boxi/hesai/points_undistorted}
+          type: CObservationPointCloud
+          sensorLabel: "lidar"
+
+        - topic: ${MOLA_IMU_TOPIC|/boxi/adis/imu}
+          type: CObservationIMU
+          sensorLabel: "imu"
+          is_optional: true
+
+        - topic: ${MOLA_VO_LEFT_TOPIC|/boxi/alphasense/front_left/image_raw/compressed}
+          type: CObservationImage
+          sensorLabel: image_0
+          is_optional: true
+
+        - topic: ${MOLA_VO_RIGHT_TOPIC|/boxi/alphasense/front_right/image_raw/compressed}
+          type: CObservationImage
+          sensorLabel: image_1
+          is_optional: true
