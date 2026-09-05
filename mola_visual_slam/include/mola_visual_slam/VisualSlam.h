@@ -89,11 +89,30 @@ class VisualSlam : public mola::FrontEndBase,
       const mrpt::img::CImage& left, const mrpt::img::CImage& right, const mrpt::img::TCamera& cam,
       double baseline, const mrpt::Clock::time_point& timestamp);
 
-  mrpt::poses::CPose3D currentPose() const { return pose_wc_; }
-  bool                 isInitialized() const { return state_ == State::TRACKING; }
-  size_t               numLandmarks() const { return landmarks_.size(); }
-  size_t               numActiveLandmarks() const;
-  size_t               numKeyframes() const { return keyframes_.size(); }
+  /** Estimated pose of the LEFT camera, in the frame the left camera had at
+   *  the first processed frame (T_wc). When stereo rectification is active
+   *  (see \c right_camera_pose) the internal estimate lives in the rectified
+   *  frame, which is rotated with respect to the physical camera; this getter
+   *  undoes that rotation, so the returned trajectory is always the physical
+   *  left camera's, whether rectification is on or off. */
+  [[nodiscard]] mrpt::poses::CPose3D currentPose() const;
+
+  /** Estimated pose of the VEHICLE body, in the frame the body had at the
+   *  first processed frame. Requires the camera-on-robot extrinsic, which is
+   *  taken from the incoming observations' \c cameraPose (as filled from /tf
+   *  or a fixed sensor pose by the dataset source) or from the
+   *  \c camera_pose_on_robot parameter. Without it this falls back to
+   *  currentPose(), i.e. the camera's own trajectory. */
+  [[nodiscard]] mrpt::poses::CPose3D currentRobotPose() const;
+
+  /** Whether the camera-on-robot extrinsic is known, i.e. whether
+   *  currentRobotPose() is really a body pose and not the camera's. */
+  [[nodiscard]] bool hasRobotExtrinsics() const { return camera_pose_on_robot_.has_value(); }
+
+  bool   isInitialized() const { return state_ == State::TRACKING; }
+  size_t numLandmarks() const { return landmarks_.size(); }
+  size_t numActiveLandmarks() const;
+  size_t numKeyframes() const { return keyframes_.size(); }
 
   /** Per-stage timing profiler. Dumps a full table on destruction; call
    *  `profiler().dumpAllStats()` to print it on demand. */
@@ -125,14 +144,37 @@ class VisualSlam : public mola::FrontEndBase,
    *  default) to keep the old behavior: raw images are assumed already
    *  rectified and sharing the left camera's intrinsics. */
   std::string right_camera_pose_str_;
-  int         max_features_    = 400;
-  float       min_distance_    = 12.0f;
-  int         redetect_below_  = 150;
-  int         lk_win_size_     = 21;
-  int         lk_max_levels_   = 3;
-  int         min_pnp_points_  = 12;
-  int         ba_window_size_  = 8;
-  int         cull_min_obs_    = 2;
+  /** Undo a 180-degree rotation baked into an incoming stream. Some rigs
+   *  physically mount one of the two cameras upside down (and some datasets
+   *  ship one stream rotated while their calibration describes the upright
+   *  image). Either way the pair cannot be rectified as-is: no rotation of the
+   *  rectified frame can align two images whose rows run in opposite
+   *  directions, so every stereo match fails. Rotating the affected stream back
+   *  restores agreement with the calibration, which is why the intrinsics need
+   *  no adjustment here. */
+  bool left_image_rotate_180_  = false;
+  bool right_image_rotate_180_ = false;
+  /** Left camera pose on the vehicle ("x y z yaw_deg pitch_deg roll_deg"),
+   *  overriding whatever the incoming observations carry in their
+   *  \c cameraPose field. Only used to report body-frame poses; it has no
+   *  effect on the visual estimation itself. */
+  std::string camera_pose_on_robot_str_;
+  int         max_features_   = 400;
+  float       min_distance_   = 12.0f;
+  int         redetect_below_ = 150;
+  int         lk_win_size_    = 21;
+  int         lk_max_levels_  = 3;
+  int         min_pnp_points_ = 12;
+  /** Minimum fraction of the 3D-2D correspondences that PnP must explain for
+   *  its pose to be accepted. A solve that fits only a small minority of them
+   *  has converged to a wrong local minimum; taking it corrupts the map on the
+   *  next frame, from which nothing recovers. */
+  float min_pnp_inlier_ratio_ = 0.35f;
+  /** Consecutive frames without a localizable pose before the local map is
+   *  rebuilt from scratch at the dead-reckoned pose. */
+  int lost_max_frames_ = 2;
+  int ba_window_size_  = 8;
+  int cull_min_obs_    = 2;
   // two-view initialization:
   float init_min_parallax_px_ = 30.0f;  ///< median parallax to attempt bootstrap
   int   init_min_inliers_     = 50;  ///< min essential-matrix inliers to accept init
@@ -177,13 +219,16 @@ class VisualSlam : public mola::FrontEndBase,
   std::vector<bool>                  track_has_lastkf_;  ///< feature existed at last keyframe
   mrpt::poses::CPose3D               pose_cw_;
   mrpt::poses::CPose3D               pose_wc_;
+  mrpt::poses::CPose3D               last_motion_;  ///< previous frame-to-frame motion (T_wc)
+  bool                               have_motion_ = false;
   std::vector<mrpt::math::TPoint3D>  trajectory_;
   mrpt::img::TCamera                 camera_;
-  int                                frame_count_     = 0;
-  int                                frames_since_kf_ = 0;
-  int                                ref_kf_features_ = 0;
-  bool                               gui_created_     = false;
-  double                             cur_baseline_    = 0.0;  ///< stereo baseline [m] (0 = mono)
+  int                                frame_count_         = 0;
+  int                                frames_since_kf_     = 0;
+  int                                frames_without_pose_ = 0;
+  int                                ref_kf_features_     = 0;
+  bool                               gui_created_         = false;
+  double                             cur_baseline_ = 0.0;  ///< stereo baseline [m] (0 = mono)
 
   // ---- initialization buffer ----
   std::vector<mrpt::math::TPoint2Df> init_ref_pts_;  ///< feature pixels in the first frame
@@ -199,14 +244,48 @@ class VisualSlam : public mola::FrontEndBase,
   bool                    have_right_ = false;
 
   // ---- optional stereo rectification (unrectified rigs only) ----
-  std::optional<mrpt::poses::CPose3D> right_camera_pose_;  ///< parsed once, from right_camera_pose_str_
-  mrpt::img::CStereoRectifyMap        rectify_map_;
+  std::optional<mrpt::poses::CPose3D>
+                               right_camera_pose_;  ///< parsed once, from right_camera_pose_str_
+  mrpt::img::CStereoRectifyMap rectify_map_;
+  /** Pose of the ORIGINAL left camera frame expressed in the RECTIFIED frame
+   *  (pure rotation). Empty while no rectification is in use. */
+  std::optional<mrpt::poses::CPose3D> left_cam_in_rectified_;
+
+  // ---- extrinsics for reporting body-frame poses ----
+  std::optional<mrpt::poses::CPose3D> camera_pose_on_robot_;  ///< T_body_leftcam
 
   // ---- profiling ----
   mrpt::system::CTimeLogger profiler_{true, "VisualSlam"};
 
+  /** Latches the camera-on-robot extrinsic from an incoming observation, if it
+   *  is not already known from the \c camera_pose_on_robot parameter. */
+  void rememberCameraPoseOnRobot(const mrpt::poses::CPose3D& p);
   bool tryInitialize(const mrpt::img::CImage& gray);
   void detectInitialFeatures(const mrpt::img::CImage& gray);
+  /** Constant-velocity extrapolation of the camera-in-world pose. */
+  [[nodiscard]] mrpt::poses::CPose3D predictedPoseWc() const;
+
+  /** Localizes the current frame from 3D-2D correspondences (robust PnP, seeded
+   *  by a constant-velocity prediction) and updates pose_cw_ / pose_wc_ /
+   *  last_motion_. \p corr_idx maps each correspondence back to its index in the
+   *  per-feature tracking arrays, so rejected ones can be flagged in
+   *  \p pnp_outlier (sized as those arrays). Returns false if the pose could not
+   *  be estimated with enough support, in which case the prediction is used. */
+  bool solveFramePose(
+      const std::vector<mrpt::math::TPoint3Df>& worldPts,
+      const std::vector<mrpt::math::TPoint2Df>& pixels, const std::vector<size_t>& corr_idx,
+      const mrpt::img::TCamera& cam, std::vector<bool>& pnp_outlier);
+
+  /** Fills \p out with, per tracked feature, where the constant-velocity
+   *  prediction says it should appear in the current frame (its previous pixel
+   *  for features with no 3D position yet). Used as the LK initial guess. */
+  void predictTrackedPixels(std::vector<mrpt::math::TPoint2Df>& out) const;
+
+  /** Drops the local map and rebuilds it from the current stereo pair at the
+   *  current (dead-reckoned) pose, after tracking has been lost. */
+  void restartMapHere(
+      const mrpt::img::CImage& grayL, const mrpt::img::CImage& grayR, const mrpt::img::TCamera& cam,
+      double baseline);
   void trackAndLocalize(const mrpt::img::CImage& gray);
   /** Stereo-match a set of left features and append valid ones as new metric
    *  landmarks (world frame, via the current pose). Returns count added. */
