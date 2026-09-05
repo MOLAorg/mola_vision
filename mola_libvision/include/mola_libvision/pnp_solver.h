@@ -32,6 +32,12 @@ struct PnPParams
   /** Convergence: stop when the se3 increment norm is below this. */
   float eps_step = 1e-7f;
 
+  /** Convergence: stop when the relative decrease of the robust cost between two
+   *  accepted steps falls below this. A pure step-norm test is not enough on
+   *  real data: IRLS reweighting keeps producing tiny but non-vanishing steps,
+   *  so the solver would report "not converged" at an already-optimal pose. */
+  float eps_cost = 1e-6f;
+
   /** Initial LM damping (0 => pure Gauss-Newton). */
   float lambda_initial = 1e-3f;
 };
@@ -46,9 +52,18 @@ struct PnPResult
   /** Per-correspondence inlier flag (same size as the inputs). */
   std::vector<bool> inliers;
 
-  int   num_inliers = 0;
-  bool  converged   = false;
-  float final_cost  = 0.f;  ///< 0.5 * sum of squared inlier reprojection errors
+  int num_inliers = 0;
+
+  /** True when a stopping criterion was actually met (small step, small
+   *  relative cost change, or vanishing gradient). False means the iteration
+   *  limit was hit, which is NOT the same as failure: `pose` still holds the
+   *  best estimate found. Judge usability by `num_inliers`, not by this flag. */
+  bool converged = false;
+
+  /** Number of LM iterations actually run. */
+  int iterations = 0;
+
+  float final_cost = 0.f;  ///< 0.5 * sum of squared inlier reprojection errors
 
   /** 6x6 covariance of the se3 pose increment (ordering [rotation; translation]),
    *  computed as the inverse of the Gauss-Newton information at the solution.
