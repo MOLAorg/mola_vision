@@ -13,8 +13,17 @@ Packages:
 - `mola_visual_slam` — monocular/stereo visual SLAM front-end
   (`mola::VisualSlam`). `mode=mono`: essential-matrix bootstrap, PnP tracking,
   cross-keyframe triangulation, windowed BA (up-to-scale). `mode=stereo`: pairs
-  image_0/image_1, metric depth from `matchStereo`, PnP tracking (true metric
-  scale; scale-anchored stereo BA still pending). KITTI/TUM integration tests.
+  image_0/image_1, metric depth from `matchStereo`, PnP tracking seeded by a
+  constant-velocity model, windowed BA with a stereo-disparity residual that
+  anchors metric scale. Optional `right_camera_pose` rectifies a raw
+  (non-pre-rectified) rig; `right_camera_pose.x` must be POSITIVE, i.e. the
+  right camera in the LEFT camera's frame. `currentPose()` is the physical left
+  camera; `currentRobotPose()` is the vehicle body, and needs the camera-on-robot
+  extrinsic (from the observations' `cameraPose`, or `camera_pose_on_robot`).
+  `mola-visual-slam-cli` runs it offline on a ROS1 bag or KITTI and writes a TUM
+  trajectory. Tests: `test_stereo_synthetic` (analytically ray-traced textured
+  room; ground-truth-exact, no dataset needed) plus KITTI/TUM integration tests
+  that skip unless their env vars are set.
 
 ## Build & test (ROS-agnostic; build_type cmake)
 This package needs `mola_common` + the MRPT-3.x `mola_kernel`/`mola_viz` +

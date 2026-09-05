@@ -13,6 +13,20 @@ target_include_directories(test_visual_slam PRIVATE
 )
 gtest_discover_tests(test_visual_slam)
 
+# Ground-truth-exact stereo tests on an analytically ray-traced textured room:
+# metric scale, recovered attitude and pure-rotation behavior, no dataset needed.
+add_executable(test_stereo_synthetic test_stereo_synthetic.cpp)
+target_link_libraries(test_stereo_synthetic
+  PRIVATE
+    mola_visual_slam
+    GTest::GTest
+    GTest::Main
+)
+target_include_directories(test_stereo_synthetic PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+)
+gtest_discover_tests(test_stereo_synthetic)
+
 # Integration test on a real TUM RGB-D sequence (monocular). Skips at runtime
 # unless TUM_RAWLOG is set; needs mrpt_obs (CRawlog) directly.
 add_executable(test_tum_mono test_tum_mono.cpp)
