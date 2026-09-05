@@ -15,6 +15,36 @@
 
 using namespace mola::vision;
 
+namespace
+{
+struct Intrinsics
+{
+  double fx, fy, cx, cy;
+};
+
+/** Robust (Huber) reprojection cost of all correspondences at pose (R, t). */
+double robustCost(
+    const Eigen::Matrix3d& R, const Eigen::Vector3d& t, const std::vector<Eigen::Vector3d>& Xw,
+    const std::vector<Eigen::Vector2d>& z, const Intrinsics& K, double delta)
+{
+  double cost = 0.0;
+  for (size_t i = 0; i < Xw.size(); ++i)
+  {
+    const Eigen::Vector3d Xc = R * Xw[i] + t;
+    if (Xc.z() <= 1e-6)
+    {
+      continue;
+    }
+    const double inv_z = 1.0 / Xc.z();
+    const double eu    = K.fx * Xc.x() * inv_z + K.cx - z[i].x();
+    const double ev    = K.fy * Xc.y() * inv_z + K.cy - z[i].y();
+    const double r     = std::hypot(eu, ev);
+    cost += (r <= delta) ? 0.5 * r * r : delta * (r - 0.5 * delta);
+  }
+  return cost;
+}
+}  // namespace
+
 PnPResult mola::vision::solvePnP(
     const std::vector<mrpt::math::TPoint3Df>& worldPts,
     const std::vector<mrpt::math::TPoint2Df>& pixels, const mrpt::img::TCamera& cam,
@@ -49,17 +79,24 @@ PnPResult mola::vision::solvePnP(
     z[i]  = Eigen::Vector2d(pixels[i].x, pixels[i].y);
   }
 
-  const double chi2        = static_cast<double>(params.chi2_threshold);
-  const double huber_delta = static_cast<double>(params.huber_delta);
-  double       lambda      = static_cast<double>(params.lambda_initial);
+  const double     chi2        = static_cast<double>(params.chi2_threshold);
+  const double     huber_delta = static_cast<double>(params.huber_delta);
+  const double     eps_cost    = static_cast<double>(params.eps_cost);
+  const Intrinsics K{fx, fy, cx, cy};
 
-  // Robust Gauss-Newton with LM damping. During optimization ALL points are
-  // used with Huber down-weighting (gross outliers get a small but non-zero
-  // weight). Hard inlier/outlier classification by the chi-square gate is done
-  // only AFTER convergence: gating from a poor initial pose would discard every
-  // correspondence and stall the solver.
+  double lambda = static_cast<double>(params.lambda_initial);
+  double nu     = 2.0;  // Nielsen damping-increase factor
+  double cost   = robustCost(R, t, Xw, z, K, huber_delta);
+
+  // Robust Gauss-Newton with proper Levenberg-Marquardt accept/reject. During
+  // optimization ALL points are used with Huber down-weighting (gross outliers
+  // get a small but non-zero weight). Hard inlier/outlier classification by the
+  // chi-square gate is done only AFTER convergence: gating from a poor initial
+  // pose would discard every correspondence and stall the solver.
   for (int iter = 0; iter < params.max_iters; ++iter)
   {
+    result.iterations = iter + 1;
+
     Eigen::Matrix<double, 6, 6> H      = Eigen::Matrix<double, 6, 6>::Zero();
     Eigen::Matrix<double, 6, 1> g      = Eigen::Matrix<double, 6, 1>::Zero();
     int                         n_used = 0;
@@ -108,7 +145,7 @@ PnPResult mola::vision::solvePnP(
       break;  // too few visible points
     }
 
-    // LM damping on the diagonal.
+    // LM damping on the diagonal (Marquardt, multiplicative: scale-aware).
     Eigen::Matrix<double, 6, 6> H_lm = H;
     for (int d = 0; d < 6; ++d)
     {
@@ -116,18 +153,59 @@ PnPResult mola::vision::solvePnP(
     }
 
     const Eigen::Matrix<double, 6, 1> delta = H_lm.ldlt().solve(-g);
-
-    // Retract: rotation right-perturbation, translation additive.
-    R = R * so3Exp(delta.head<3>());
-    t = t + delta.tail<3>();
-
-    if (delta.norm() < params.eps_step)
+    if (!delta.allFinite())
     {
-      result.converged = true;
-      break;
+      lambda = std::min(lambda * 4.0, 1e12);
+      continue;
     }
-    // Mild LM annealing: shrink damping as we proceed.
-    lambda = std::max(lambda * 0.5, 1e-8);
+
+    // Tentative retraction: rotation right-perturbation, translation additive.
+    const Eigen::Matrix3d R_new    = R * so3Exp(delta.head<3>());
+    const Eigen::Vector3d t_new    = t + delta.tail<3>();
+    const double          cost_new = robustCost(R_new, t_new, Xw, z, K, huber_delta);
+
+    // Predicted reduction of the damped quadratic model (Nielsen), with
+    // D = diag(JᵀJ) matching the damping actually applied above:
+    //   pred = 0.5 * ( lambda * dxᵀ D dx  -  gᵀ dx ).
+    double dDd = 0.0;
+    for (int d = 0; d < 6; ++d)
+    {
+      dDd += H(d, d) * delta(d) * delta(d);
+    }
+    const double predicted = 0.5 * (lambda * dDd - g.dot(delta));
+    const double rho       = (predicted > 0.0) ? (cost - cost_new) / predicted : -1.0;
+
+    if (rho > 0.0 && cost_new < cost)
+    {
+      const double rel_decrease = (cost > 1e-12) ? (cost - cost_new) / cost : 0.0;
+      R                         = R_new;
+      t                         = t_new;
+      cost                      = cost_new;
+
+      const double f = 2.0 * rho - 1.0;
+      lambda *= std::max(1.0 / 3.0, 1.0 - f * f * f);
+      lambda = std::max(lambda, 1e-8);
+      nu     = 2.0;
+
+      if (delta.norm() < params.eps_step || rel_decrease < eps_cost)
+      {
+        result.converged = true;
+        break;
+      }
+    }
+    else
+    {
+      // Reject: keep the current state, increase damping geometrically. A
+      // rejected step at high damping means we are already at the optimum of
+      // this robust cost, so stop instead of burning the iteration budget.
+      lambda = std::min(lambda * nu, 1e12);
+      nu *= 2.0;
+      if (lambda >= 1e8)
+      {
+        result.converged = true;
+        break;
+      }
+    }
   }
 
   // Final inlier classification + information matrix (inliers only).

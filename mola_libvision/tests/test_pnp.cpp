@@ -171,3 +171,76 @@ TEST(PnP, TooFewPoints)
   EXPECT_FALSE(res.converged);
   EXPECT_EQ(res.num_inliers, 0);
 }
+
+// ---------------------------------------------------------------------------
+// Convergence must be reported on NOISY correspondences seeded from a nearby
+// pose - the regime a tracking front-end actually runs in, where the increment
+// is already small from the first iteration and the Huber reweighting keeps
+// producing small but non-vanishing steps.
+// ---------------------------------------------------------------------------
+TEST(PnP, ConvergesOnNoisyCorrespondences)
+{
+  const auto cam = makeCamera();
+
+  int nConverged = 0;
+  int nTrials    = 0;
+  for (unsigned seed = 1; seed <= 20; ++seed)
+  {
+    auto                             scene = makeScene(120, seed);
+    std::mt19937                     rng(seed * 977u);
+    std::normal_distribution<double> pix(0.0, 0.5);  // 0.5 px feature noise
+    for (auto& p : scene.pixels)
+    {
+      p.x += static_cast<float>(pix(rng));
+      p.y += static_cast<float>(pix(rng));
+    }
+
+    // Seeded near the truth, the way a tracking front-end seeds it from the
+    // previous frame. This is the regime where the increment is already small
+    // from the first iteration, so a step-norm-only stopping test never fires.
+    const mrpt::poses::CPose3D seedPose =
+        scene.gtPose + mrpt::poses::CPose3D(0.02, -0.01, 0.03, 0.004, -0.003, 0.002);
+    const PnPResult res = solvePnP(scene.worldPts, scene.pixels, cam, seedPose);
+    ++nTrials;
+    if (res.converged)
+    {
+      ++nConverged;
+    }
+    // Whatever the flag says, the returned pose must be the right one.
+    EXPECT_LT(rotationErrorDeg(res.pose, scene.gtPose), 0.2) << "seed " << seed;
+    EXPECT_LT((res.pose.translation() - scene.gtPose.translation()).norm(), 0.01)
+        << "seed " << seed;
+    EXPECT_GE(res.num_inliers, 100) << "seed " << seed;
+  }
+  EXPECT_EQ(nConverged, nTrials) << "every noisy solve should report convergence";
+}
+
+// ---------------------------------------------------------------------------
+// Hitting the iteration cap is NOT failure: the returned pose is still the best
+// one found, and the caller must judge usability by the inlier support.
+//
+// This is the contract a VO front-end depends on. Gating the pose update on
+// `converged` instead loses every frame whose solve merely ran out of
+// iterations - which on real imagery froze the trajectory for roughly a quarter
+// of all frames and was, by a wide margin, the largest source of drift.
+// ---------------------------------------------------------------------------
+TEST(PnP, IterationCapStillReturnsUsablePose)
+{
+  const auto scene = makeScene(80, 3);
+  const auto cam   = makeCamera();
+
+  PnPParams tight;
+  tight.max_iters = 2;  // guaranteed to stop on the cap, far from convergence
+
+  const mrpt::poses::CPose3D seedPose;  // identity: far from the truth
+  const PnPResult            res = solvePnP(scene.worldPts, scene.pixels, cam, seedPose, tight);
+
+  EXPECT_FALSE(res.converged) << "two iterations cannot converge from identity";
+  // ...and yet the estimate must be far better than the seed it started from,
+  // and its inlier count must reflect that.
+  EXPECT_LT(rotationErrorDeg(res.pose, scene.gtPose), rotationErrorDeg(seedPose, scene.gtPose));
+  EXPECT_LT(
+      (res.pose.translation() - scene.gtPose.translation()).norm(),
+      (seedPose.translation() - scene.gtPose.translation()).norm());
+  EXPECT_EQ(static_cast<size_t>(res.inliers.size()), scene.worldPts.size());
+}
