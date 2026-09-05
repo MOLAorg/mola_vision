@@ -126,6 +126,14 @@ TEST(VisualSlamKITTI, StereoAteSeq00)
   std::vector<Eigen::Vector3d> est;
   std::vector<int>             est_frame;
 
+  // Optional dump of the full 3x4 estimated pose per frame (KITTI poses/ format,
+  // same frame as the ground truth), for offline error analysis.
+  std::ofstream dump;
+  if (const char* dp = std::getenv("KITTI_DUMP_TRAJ"))
+  {
+    dump.open(dp);
+  }
+
   for (size_t i = 0; i < max_frames; ++i)
   {
     const std::string lp = dir + "/image_0/" + frameName(static_cast<int>(i));
@@ -150,6 +158,19 @@ TEST(VisualSlamKITTI, StereoAteSeq00)
     {
       est.emplace_back(pose.x(), pose.y(), pose.z());
       est_frame.push_back(static_cast<int>(i));
+      if (dump.is_open())
+      {
+        const auto H = pose.getHomogeneousMatrixVal<mrpt::math::CMatrixDouble44>();
+        dump << i;
+        for (int r = 0; r < 3; ++r)
+        {
+          for (int c = 0; c < 4; ++c)
+          {
+            dump << " " << std::setprecision(12) << H(r, c);
+          }
+        }
+        dump << "\n";
+      }
     }
   }
 

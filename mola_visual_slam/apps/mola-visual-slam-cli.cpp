@@ -50,8 +50,8 @@ namespace
 template <typename T>
 struct Opt
 {
-  T             value{};
-  CLI::Option * opt = nullptr;
+  T            value{};
+  CLI::Option* opt = nullptr;
 
   bool     isSet() const { return opt && opt->count() > 0; }
   const T& getValue() const { return value; }
@@ -64,12 +64,13 @@ struct Cli
   Opt<std::string> argYAML;
   Opt<std::string> arg_verbosity_level;
   Opt<std::string> arg_outPath;
-  Opt<int>          arg_firstN;
-  Opt<int>          arg_skipFirstN;
+  Opt<int>         arg_firstN;
+  Opt<int>         arg_skipFirstN;
   Opt<std::string> arg_leftLabel;
   Opt<std::string> arg_rightLabel;
   Opt<std::string> arg_baseLinkName;
-  Opt<double>       arg_progressBarPeriod;
+  Opt<bool>        arg_saveCameraFrame;
+  Opt<double>      arg_progressBarPeriod;
 
 #if defined(HAVE_MOLA_INPUT_ROSBAG1)
   Opt<std::string> argRosbag1;
@@ -101,28 +102,26 @@ struct Cli
                "Save the estimated path as a TXT file using the TUM file format {see evo docs}")
             ->option_text("output-trajectory.txt");
 
-    arg_firstN.opt = cmd
-                         .add_option(
-                             "--only-first-n", arg_firstN.value,
-                             "Run for the first N stereo/mono pairs only {0=default, not used}")
+    arg_firstN.opt = cmd.add_option(
+                            "--only-first-n", arg_firstN.value,
+                            "Run for the first N stereo/mono pairs only {0=default, not used}")
                          ->check(CLI::NonNegativeNumber);
 
-    arg_skipFirstN.opt =
-        cmd.add_option(
-               "--skip-first-n", arg_skipFirstN.value,
-               "Skip the first N dataset entries {0=default, not used}")
-            ->check(CLI::NonNegativeNumber);
+    arg_skipFirstN.opt = cmd.add_option(
+                                "--skip-first-n", arg_skipFirstN.value,
+                                "Skip the first N dataset entries {0=default, not used}")
+                             ->check(CLI::NonNegativeNumber);
 
     arg_leftLabel.value = "image_0";
     arg_leftLabel.opt   = cmd.add_option(
-        "--left-sensor-label", arg_leftLabel.value,
-        "sensorLabel VisualSlam reads the left/monocular image from")
+                                 "--left-sensor-label", arg_leftLabel.value,
+                                 "sensorLabel VisualSlam reads the left/monocular image from")
                             ->capture_default_str();
 
     arg_rightLabel.value = "image_1";
     arg_rightLabel.opt   = cmd.add_option(
-        "--right-sensor-label", arg_rightLabel.value,
-        "sensorLabel VisualSlam reads the right (stereo mode) image from")
+                                  "--right-sensor-label", arg_rightLabel.value,
+                                  "sensorLabel VisualSlam reads the right (stereo mode) image from")
                              ->capture_default_str();
 
     arg_baseLinkName.value = "base_link";
@@ -134,6 +133,12 @@ struct Cli
             ->envname("MOLA_TF_BASE_LINK")
             ->capture_default_str();
 
+    arg_saveCameraFrame.opt = cmd.add_flag(
+        "--save-camera-frame", arg_saveCameraFrame.value,
+        "Save the LEFT CAMERA trajectory instead of the vehicle-body one. By default the "
+        "output is in the body frame whenever the camera-on-robot extrinsic is known (from "
+        "/tf or --left-sensor-pose), which is what a dataset's ground truth uses.");
+
     arg_progressBarPeriod.value = -1.0;
     arg_progressBarPeriod.opt =
         cmd.add_option(
@@ -143,11 +148,10 @@ struct Cli
             ->check(CLI::Range(0.0, 100.0));
 
 #if defined(HAVE_MOLA_INPUT_ROSBAG1)
-    argRosbag1.opt = cmd
-                          .add_option(
-                              "--input-rosbag1", argRosbag1.value,
-                              "INPUT DATASET: rosbag1. Input dataset in ROS 1 bag format {*.bag}")
-                          ->option_text("dataset.bag");
+    argRosbag1.opt = cmd.add_option(
+                            "--input-rosbag1", argRosbag1.value,
+                            "INPUT DATASET: rosbag1. Input dataset in ROS 1 bag format {*.bag}")
+                         ->option_text("dataset.bag");
 
     arg_leftTopic.opt = cmd.add_option(
         "--left-topic", arg_leftTopic.value,
@@ -168,11 +172,10 @@ struct Cli
 #endif
 
 #if defined(HAVE_MOLA_INPUT_KITTI)
-    argKittiSeq.opt = cmd
-                           .add_option(
-                               "--input-kitti-seq", argKittiSeq.value,
-                               "INPUT DATASET: Use KITTI dataset sequence number 00|01|...")
-                           ->option_text("00");
+    argKittiSeq.opt = cmd.add_option(
+                             "--input-kitti-seq", argKittiSeq.value,
+                             "INPUT DATASET: Use KITTI dataset sequence number 00|01|...")
+                          ->option_text("00");
 #endif
   }
 };
@@ -316,6 +319,7 @@ int main_visual_slam(Cli& cli)
   ASSERT_(dataset);
 
   mrpt::poses::CPose3DInterpolator estimatedTrajectory;
+  const bool                       saveCameraFrame = cli.arg_saveCameraFrame.isSet();
 
   const double tStart = mrpt::Clock::nowDouble();
 
@@ -354,11 +358,16 @@ int main_visual_slam(Cli& cli)
 
     if (vslam->isInitialized())
     {
-      estimatedTrajectory.insert(obs->timestamp, vslam->currentPose());
+      // Body frame whenever the camera-on-robot extrinsic is known (from /tf
+      // or --left-sensor-pose), so the saved trajectory is directly
+      // comparable to a dataset's own body-frame ground truth; the camera's
+      // own trajectory otherwise.
+      estimatedTrajectory.insert(
+          obs->timestamp, saveCameraFrame ? vslam->currentPose() : vslam->currentRobotPose());
     }
 
-    const size_t N  = (dataset->datasetSize() - 1);
-    const double pc = N > 0 ? static_cast<double>(i) / static_cast<double>(N) : 1.0;
+    const size_t N           = (dataset->datasetSize() - 1);
+    const double pc          = N > 0 ? static_cast<double>(i) / static_cast<double>(N) : 1.0;
     const bool   isLastEntry = (i + 1 == lastDatasetEntry);
 
     bool doPrintProgress = false;

@@ -5,16 +5,17 @@
 # NOT front_center/left/right, which are wide-FOV RGB cameras). Camera
 # intrinsics (fisheye/equidistant) are read automatically from each topic's own
 # sensor_msgs/CameraInfo message; the (fixed, per-rig) sensor poses and the
-# front_left->front_right extrinsic are given here, since the alphasense.bag's
-# /tf_static has no per-camera frames and its camera_info is unrectified (no
-# baseline term) -- see leggedrobotics/grand_tour_box's
-# box_calibration/.../calibration/tf/calibration_latest_IMU.yaml, which both
-# this file's fixed_sensor_pose values and right_camera_pose were derived from
-# (box_base_to_alphasense_base composed with
-# alphasense_base_to_alphasense_front_right; front_left coincides with
-# alphasense_base itself). right_camera_pose makes VisualSlam rectify every
-# pair (mrpt::img::CStereoRectifyMap) before matching, since the raw pair is
-# neither epipolar-aligned nor sharing one camera's intrinsics.
+# front_left->front_right extrinsic are given here, since alphasense.bag itself
+# carries no /tf and its camera_info is unrectified (no baseline term).
+#
+# All the poses below come from the mission's own <mission>_tf_model.bag
+# /tf_static tree (base -> box_base -> alphasense_base -> front_left|front_right;
+# note alphasense_base is the MIDPOINT of the pair, not the left camera).
+# right_camera_pose makes VisualSlam rectify every pair
+# (mrpt::img::CStereoRectifyMap) before matching, since the raw pair is neither
+# epipolar-aligned nor sharing one camera's intrinsics. The fixed_sensor_pose
+# values additionally let VisualSlam report body-frame poses, which is the frame
+# this dataset's ground truth uses.
 #
 # Usage:
 #   MOLA_INPUT_ROSBAG1=/path/to/<mission>_alphasense.bag \
@@ -47,15 +48,16 @@ modules:
         - topic: /boxi/alphasense/front_left/image_raw/compressed
           type: CObservationImage
           sensorLabel: image_0
-          # base -> alphasense_base (== front_left), from calibration_latest_IMU.yaml
-          fixed_sensor_pose: "0.345218 -0.091271 0.072147 -90.1517 0.3368 -79.9502"
+          # base -> alphasense_front_left, composed from tf_model.bag's own
+          # /tf_static: base -> box_base -> alphasense_base -> front_left.
+          fixed_sensor_pose: "0.445966 0.064945 0.212504 -90.0457 1.0446 -99.9009"
           use_fixed_sensor_pose: true
 
         - topic: /boxi/alphasense/front_right/image_raw/compressed
           type: CObservationImage
           sensorLabel: image_1
-          # base -> alphasense_base -> front_right, composed the same way
-          fixed_sensor_pose: "0.344959 0.019227 0.072399 -90.2389 -0.8356 -79.9837"
+          # base -> alphasense_front_right, composed the same way
+          fixed_sensor_pose: "0.444776 -0.045125 0.211165 -90.0398 -0.1474 -99.8744"
           use_fixed_sensor_pose: true
 
   # =====================
@@ -78,7 +80,14 @@ modules:
       # every pair before processStereoFrame() - stereo_baseline itself is
       # then derived automatically from the rectified geometry, not needed
       # here.
-      right_camera_pose: "-0.110496 0.000295 -0.000613 -1.1697 -0.1188 -0.0327"
+      right_camera_pose: "0.110078 -0.000468 -0.001201 -1.1752 0.1992 0.0244"
+      # Some missions ship one of the two streams 180 deg rotated while their
+      # camera_info still describes the upright image (confirmed on arc-3's
+      # front_left, whose camera_info is byte-identical to heap-1's). No
+      # rectification can align two images whose rows run in opposite
+      # directions, so every stereo match then fails and the map stays empty.
+      # Uncomment for such a mission:
+      # left_image_rotate_180: true
       max_features: 500
       min_distance: 12.0
       redetect_below: 200
