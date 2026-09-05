@@ -91,11 +91,13 @@ bool lkTrackPoint(
   const GrayView curr_view(curr_img);
   const int      cols = prev_view.cols;
   const int      rows = prev_view.rows;
-  const int      W    = params.win_size;
+  // Half-width of the (2W+1)-sided patch; win_size is the full side length.
+  const int W = std::max(1, params.win_size / 2);
 
   // Precompute gradient patch around (px_prev, py_prev) in prev_img
   // using finite differences on the float-sampled image.
   float Gxx = 0, Gxy = 0, Gyy = 0;
+  float wsum = 0;
 
   // Collect patch intensities and gradients in prev. Reuse thread-local buffers
   // to avoid a heap allocation on every (point, pyramid-level) call.
@@ -103,9 +105,24 @@ bool lkTrackPoint(
   static thread_local std::vector<float> Ix_patch;
   static thread_local std::vector<float> Iy_patch;
   static thread_local std::vector<float> I_prev_patch;
+  static thread_local std::vector<float> wsq_patch;
   Ix_patch.resize(patch_size);
   Iy_patch.resize(patch_size);
   I_prev_patch.resize(patch_size);
+  wsq_patch.resize(patch_size);
+
+  // Per-pixel window weight, as sqrt(w) folded into the gradients and the
+  // template intensities: then G = sum(w * g g^T) and b = sum(w * It * g) fall
+  // out of the same plain products as the unweighted case.
+  //
+  // Why weight at all: LK fits a pure translation to a patch that in reality
+  // undergoes an affine warp (perspective zoom, surface slant), and the
+  // resulting bias is a gradient-energy-weighted average of that warp over the
+  // patch. Tapering the patch shrinks the bias like a smaller window would,
+  // while keeping the convergence basin (and the noise averaging) of the large
+  // one.
+  const float sigma  = 0.5f * static_cast<float>(W);
+  const float inv2s2 = (sigma > 0.f) ? 1.f / (2.f * sigma * sigma) : 0.f;
 
   int idx = 0;
   for (int dy = -W; dy <= W; ++dy)
@@ -117,26 +134,33 @@ bool lkTrackPoint(
 
       if (x < 1 || x >= static_cast<float>(cols - 1) || y < 1 || y >= static_cast<float>(rows - 1))
       {
-        Ix_patch[idx] = Iy_patch[idx] = I_prev_patch[idx] = 0.f;
+        Ix_patch[idx] = Iy_patch[idx] = I_prev_patch[idx] = wsq_patch[idx] = 0.f;
         continue;
       }
 
-      I_prev_patch[idx] = prev_view.at(x, y);
+      const float r2 = static_cast<float>(dx * dx + dy * dy);
+      const float ws = params.gaussian_window ? std::exp(-0.5f * r2 * inv2s2) : 1.f;
+      wsq_patch[idx] = ws;
+
+      I_prev_patch[idx] = ws * prev_view.at(x, y);
       // Central differences for gradient
-      Ix_patch[idx] = 0.5f * (prev_view.at(x + 1, y) - prev_view.at(x - 1, y));
-      Iy_patch[idx] = 0.5f * (prev_view.at(x, y + 1) - prev_view.at(x, y - 1));
+      Ix_patch[idx] = ws * 0.5f * (prev_view.at(x + 1, y) - prev_view.at(x - 1, y));
+      Iy_patch[idx] = ws * 0.5f * (prev_view.at(x, y + 1) - prev_view.at(x, y - 1));
 
       Gxx += Ix_patch[idx] * Ix_patch[idx];
       Gxy += Ix_patch[idx] * Iy_patch[idx];
       Gyy += Iy_patch[idx] * Iy_patch[idx];
+      wsum += ws * ws;
     }
   }
 
-  // Check minimum eigenvalue of G = [Gxx Gxy; Gxy Gyy]
+  // Check minimum eigenvalue of G = [Gxx Gxy; Gxy Gyy]. The threshold scales
+  // with the total window weight, so it means the same thing (an average
+  // per-pixel gradient energy) whatever the window size or tapering.
   const float trace   = Gxx + Gyy;
   const float disc    = std::sqrt(std::max(0.f, (Gxx - Gyy) * (Gxx - Gyy) + 4.f * Gxy * Gxy));
   const float min_eig = (trace - disc) * 0.5f;
-  if (min_eig < params.min_eig_threshold * static_cast<float>(patch_size))
+  if (min_eig < params.min_eig_threshold * std::max(1.f, wsum))
   {
     return false;
   }
@@ -171,7 +195,7 @@ bool lkTrackPoint(
         for (int dx = -W; dx <= W; ++dx, ++idx)
         {
           const float xc = px_curr + static_cast<float>(dx);
-          const float It = I_prev_patch[idx] - curr_view.at(xc, yc);
+          const float It = I_prev_patch[idx] - wsq_patch[idx] * curr_view.at(xc, yc);
           bx += It * Ix_patch[idx];
           by += It * Iy_patch[idx];
         }
@@ -190,7 +214,7 @@ bool lkTrackPoint(
           {
             continue;
           }
-          const float It = I_prev_patch[idx] - curr_view.at(xc, yc);
+          const float It = I_prev_patch[idx] - wsq_patch[idx] * curr_view.at(xc, yc);
           bx += It * Ix_patch[idx];
           by += It * Iy_patch[idx];
         }
@@ -257,14 +281,25 @@ void mola::vision::calcOpticalFlowPyrLK(
   const int n = static_cast<int>(prev_pts.size());
   const int L = std::min(params.max_levels, static_cast<int>(prev_pyr.images.size()) - 1);
 
-  next_pts.resize(n);
-  status.resize(n, TrackStatus::OK);
-
   // Scale factor for top level
   const float scale_top = std::pow(2.f, static_cast<float>(L));
 
-  // Initialize next_pts at coarsest level
-  for (int i = 0; i < n; ++i) next_pts[i] = {prev_pts[i].x / scale_top, prev_pts[i].y / scale_top};
+  // Initialize next_pts at the coarsest level: either from the caller's
+  // predicted positions, or from "the point did not move".
+  const bool useGuess = params.use_initial_guess && static_cast<int>(next_pts.size()) == n;
+  std::vector<mrpt::math::TPoint2Df> guess;
+  if (useGuess)
+  {
+    guess = next_pts;
+  }
+  next_pts.resize(n);
+  status.assign(n, TrackStatus::OK);
+
+  for (int i = 0; i < n; ++i)
+  {
+    const auto& p = useGuess ? guess[i] : prev_pts[i];
+    next_pts[i]   = {p.x / scale_top, p.y / scale_top};
+  }
 
   // Coarse-to-fine
   for (int lv = L; lv >= 0; --lv)

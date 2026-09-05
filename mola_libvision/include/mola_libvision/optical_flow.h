@@ -25,11 +25,32 @@ enum class TrackStatus : uint8_t
 /** Parameters for pyramidal Lucas-Kanade optical flow */
 struct LKParams
 {
-  int   win_size          = 21;  ///< Patch half-width in pixels (full = 2*win+1)
-  int   max_levels        = 3;  ///< Number of pyramid levels (0 = no pyramid)
+  /** Full side length of the square patch, in pixels (OpenCV convention: 21
+   *  means a 21x21 window). Odd values are used as-is, even ones are rounded
+   *  down to the enclosing odd size.
+   *
+   *  This is an accuracy parameter, not just a speed one: LK fits a pure
+   *  translation to a patch that really undergoes an affine warp (perspective
+   *  zoom and surface slant), so the larger the patch, the larger the
+   *  systematic gain error of the recovered flow - which a VO front-end
+   *  integrates straight into a trajectory scale error. */
+  int win_size   = 21;
+  int max_levels = 3;  ///< Number of pyramid levels (0 = no pyramid)
+  /** When true, \c next_pts must already hold, at full resolution, a predicted
+   *  position per input point, and the coarse-to-fine search starts from it
+   *  instead of from "the point did not move" (OpenCV's
+   *  OPTFLOW_USE_INITIAL_FLOW). A pose-predicted guess is what keeps tracking
+   *  alive through fast rotations, where the true displacement can exceed what
+   *  the coarsest pyramid level absorbs from a zero start. */
+  bool  use_initial_guess = false;
   int   max_iters         = 30;  ///< Max iterations per level
   float eps               = 0.01f;  ///< Convergence threshold (pixel displacement)
-  float min_eig_threshold = 1e-4f;  ///< Reject patches with low eigenvalue
+  float min_eig_threshold = 1e-4f;  ///< Reject patches with low average gradient energy
+  /** Taper the patch with a Gaussian (sigma = a quarter of \c win_size) instead
+   *  of weighting every pixel equally. This keeps the convergence basin of a
+   *  large window while cutting the systematic flow gain error a large window
+   *  otherwise incurs on slanted or zooming surfaces. */
+  bool gaussian_window = true;
 };
 
 /** Pyramidal Lucas-Kanade optical flow tracker.
@@ -37,14 +58,17 @@ struct LKParams
  *  Tracks a set of 2D points from `prev` to `curr` using the KLT algorithm
  *  at multiple pyramid scales (coarse-to-fine).
  *
- *  Algorithm (per pyramid level, coarse to fine):
+ *  Algorithm (per pyramid level, coarse to fine), on a win_size x win_size
+ *  patch:
  *   1. Compute image gradient patch (Ix, Iy) around the predicted position.
  *   2. Compute the 2x2 spatial gradient matrix G = ΣIx²  ΣIxIy / ΣIxIy  ΣIy².
  *   3. Iterate: solve G·v = Σ(It·Ix, It·Iy) for sub-pixel displacement v.
  *   4. Reject if min eigenvalue of G < min_eig_threshold (flat patch).
  *   5. Propagate update to next (finer) level × 2.
  *
- *  Output: tracked positions `next_pts` and per-point `status`.
+ *  Output: tracked positions `next_pts` and per-point `status`. With
+ *  `params.use_initial_guess`, `next_pts` is also an INPUT: it must hold one
+ *  predicted full-resolution position per point on entry.
  *
  *  Note: builds image pyramids internally; for repeated tracking on the
  *  same frame, use the overload accepting pre-built CImagePyramid objects.
