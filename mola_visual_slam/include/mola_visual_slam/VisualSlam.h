@@ -9,11 +9,14 @@
 #include <mola_kernel/interfaces/LocalizationSourceBase.h>
 #include <mola_kernel/interfaces/MapSourceBase.h>
 #include <mola_kernel/interfaces/NavStateFilter.h>
+#include <mola_libvision/optical_flow.h>
 #include <mrpt/img/CImage.h>
 #include <mrpt/img/CStereoRectifyMap.h>
 #include <mrpt/img/TCamera.h>
+#include <mrpt/math/CMatrixFixed.h>
 #include <mrpt/math/TPoint2D.h>
 #include <mrpt/math/TPoint3D.h>
+#include <mrpt/obs/CObservationIMU.h>
 #include <mrpt/poses/CPose3D.h>
 #include <mrpt/system/CTimeLogger.h>
 
@@ -117,6 +120,10 @@ class VisualSlam : public mola::FrontEndBase,
   /** How many poses have been handed to the state estimator so far. */
   [[nodiscard]] size_t numFusedPoses() const { return num_fused_poses_; }
 
+  /** How many frames had their rotation predicted from the gyro rather than
+   *  from the constant-velocity model. */
+  [[nodiscard]] size_t numGyroPredictions() const { return num_gyro_predictions_; }
+
   bool   isInitialized() const { return state_ == State::TRACKING; }
   size_t numLandmarks() const { return landmarks_.size(); }
   size_t numActiveLandmarks() const;
@@ -162,6 +169,18 @@ class VisualSlam : public mola::FrontEndBase,
    *  no adjustment here. */
   bool left_image_rotate_180_  = false;
   bool right_image_rotate_180_ = false;
+  /** Size of the rectified images ("width height"), when \c right_camera_pose
+   *  rectification is active. Empty (the default) keeps the input size.
+   *
+   *  Rectification maps to a PINHOLE model at the source camera's focal length,
+   *  so a wide-angle (fisheye) lens loses everything outside the pinhole
+   *  frustum that the output canvas spans: with an equidistant lens the raw
+   *  half-angle is r/f while the rectified one is only atan(r/f), and the
+   *  difference is discarded. Enlarging the canvas keeps the same angular
+   *  resolution and recovers that periphery, at the cost of more pixels to
+   *  process. Peripheral features are the ones that constrain rotation best,
+   *  which is what long-horizon attitude drift is most sensitive to. */
+  std::string rectify_output_size_str_;
 
   /** \name Fusion into a state-estimation module
    *  When a mola::NavStateFilter module exists in the same MOLA system, each
@@ -189,12 +208,52 @@ class VisualSlam : public mola::FrontEndBase,
    *  \c cameraPose field. Only used to report body-frame poses; it has no
    *  effect on the visual estimation itself. */
   std::string camera_pose_on_robot_str_;
-  int         max_features_   = 400;
-  float       min_distance_   = 12.0f;
-  int         redetect_below_ = 150;
-  int         lk_win_size_    = 21;
-  int         lk_max_levels_  = 3;
-  int         min_pnp_points_ = 12;
+
+  /** \name Gyroscope-aided inter-frame rotation prediction
+   *  A constant-velocity model predicts the next frame's rotation from the
+   *  previous one, so it is blind to angular ACCELERATION. On an agile platform
+   *  a single sharp turn then throws the LK seed far enough that tracking
+   *  collapses, and the frames bridged by dead reckoning inject a large,
+   *  permanent attitude error into an otherwise well-behaved trajectory. A
+   *  gyroscope measures exactly the missing quantity, so feeding it in as the
+   *  rotation part of the prediction (translation stays constant-velocity)
+   *  removes that failure mode at negligible cost. Purely a PREDICTION: no
+   *  inertial residual enters PnP or bundle adjustment, so a missing, late or
+   *  noisy IMU degrades gracefully back to constant velocity.
+   *  @{ */
+  /** sensorLabel of the CObservationIMU stream to use. Empty (the default)
+   *  disables gyro aiding entirely. */
+  std::string imu_label_;
+  /** IMU pose on the vehicle ("x y z yaw_deg pitch_deg roll_deg"), overriding
+   *  whatever the incoming IMU observations carry in their \c sensorPose. */
+  std::string imu_pose_on_robot_str_;
+  /** Longest frame interval the gyro is trusted to bridge [s]. Beyond it the
+   *  prediction falls back to constant velocity. */
+  double imu_max_gap_ = 0.5;
+  /** @} */
+  /** Farthest a stereo match may be back-projected into a new landmark [m].
+   *  Stereo depth error grows as Z^2, so beyond some range a match is only a
+   *  couple of pixels of disparity and its depth is barely observable, yet PnP
+   *  and BA are handed the point as if it were as well determined as a nearby
+   *  one. Capping the range trades a smaller map for landmarks whose 3D
+   *  position the measurement actually supports. A large value keeps every
+   *  match (the previous behavior). */
+  float max_landmark_depth_ = 100.0f;
+  int   max_features_       = 400;
+  float min_distance_       = 12.0f;
+  int   redetect_below_     = 150;
+  int   lk_win_size_        = 21;
+  int   lk_max_levels_      = 3;
+  /** Forward-backward consistency gate for LK tracking [px]. Each tracked
+   *  feature is re-tracked from the current image back to the previous one, and
+   *  dropped when the round trip does not return within this distance. A patch
+   *  with no well-defined match (aperture problem, occlusion boundary, repeated
+   *  texture) slides in a direction set by the local image structure rather
+   *  than by the motion, so it biases the pose systematically instead of merely
+   *  adding noise, and the whole-mission attitude error is dominated by the
+   *  systematic part. <= 0 disables the check, and with it its second LK pass. */
+  float lk_fb_max_error_px_ = 0.0f;
+  int   min_pnp_points_     = 12;
   /** Minimum fraction of the 3D-2D correspondences that PnP must explain for
    *  its pose to be accepted. A solve that fits only a small minority of them
    *  has converged to a wrong local minimum; taking it corrupts the map on the
@@ -284,6 +343,26 @@ class VisualSlam : public mola::FrontEndBase,
   // ---- extrinsics for reporting body-frame poses ----
   std::optional<mrpt::poses::CPose3D> camera_pose_on_robot_;  ///< T_body_leftcam
 
+  // ---- gyroscope-aided rotation prediction ----
+  struct GyroSample
+  {
+    double               t = 0;  ///< timestamp [s]
+    mrpt::math::TPoint3D w;  ///< angular velocity in the IMU frame [rad/s]
+  };
+  std::deque<GyroSample>              gyro_;
+  std::optional<mrpt::poses::CPose3D> imu_pose_on_robot_;  ///< T_body_imu
+  /** Rotation taking IMU-frame vectors into the estimator's internal frame
+   *  (the rectified left camera when rectification is on, the raw left camera
+   *  otherwise). Built once both extrinsics are known. */
+  std::optional<mrpt::math::CMatrixDouble33> rot_internal_imu_;
+  /** Timestamp of the previously processed frame, for the gyro interval. */
+  std::optional<double> last_frame_ts_;
+  /** Rotation increment measured by the gyro over the current frame interval,
+   *  expressed in the internal frame. Empty when unavailable. */
+  std::optional<mrpt::math::CMatrixDouble33> gyro_delta_rot_;
+  size_t                                     num_gyro_predictions_     = 0;
+  bool                                       warned_no_imu_extrinsics_ = false;
+
   // ---- fusion into a state-estimation module ----
   std::shared_ptr<mola::NavStateFilter> nav_state_filter_;
   size_t                                num_fused_poses_      = 0;
@@ -296,6 +375,22 @@ class VisualSlam : public mola::FrontEndBase,
   /** Latches the camera-on-robot extrinsic from an incoming observation, if it
    *  is not already known from the \c camera_pose_on_robot parameter. */
   void rememberCameraPoseOnRobot(const mrpt::poses::CPose3D& p);
+
+  /** Buffers one IMU sample's angular velocity for the rotation prediction. */
+  void handleImuObservation(const mrpt::obs::CObservationIMU& o);
+
+  /** Re-tracks \p next_pts from \p curr back to \p prev and flags as LOST every
+   *  feature whose round trip does not return to its original pixel within
+   *  \c lk_fb_max_error_px_. No-op when the check is disabled. */
+  void rejectInconsistentTracks(
+      const mrpt::img::CImage& prev, const mrpt::img::CImage& curr,
+      const std::vector<mrpt::math::TPoint2Df>& next_pts,
+      std::vector<mola::vision::TrackStatus>&   status) const;
+
+  /** Integrates the buffered gyro samples over (t0, t1] and stores the result
+   *  in \c gyro_delta_rot_, as a rotation increment in the internal frame.
+   *  Clears it when no usable samples cover the interval. */
+  void updateGyroDeltaRotation(double t0, double t1);
 
   /** Hands the current vehicle pose to the state-estimation module, if one was
    *  found. No-op unless the frame was actually localized this time (a
@@ -343,10 +438,12 @@ class VisualSlam : public mola::FrontEndBase,
       const mrpt::img::CImage& left, const mrpt::img::CImage& right, const mrpt::img::TCamera& cam,
       double baseline);
   /** Windowed bundle adjustment over the recent keyframes. \p num_fixed_poses
-   *  oldest poses are held fixed: 1 for monocular (gauge only; scale is the
-   *  bootstrap's), 2 for stereo so the metric separation between two fixed
-   *  camera centers also anchors the scale (a pure-reprojection BA otherwise has
-   *  a free scale gauge that collapses the metric stereo scale). */
+   *  oldest poses are held fixed: 1 for stereo, where the per-observation
+   *  disparity residual already anchors the metric scale, so the fixed pose is
+   *  only the gauge; 2 for monocular, which has no metric anchor at all, so
+   *  fixing one pose would leave the scale gauge free for the window to drift
+   *  (or collapse) along. The distance between two fixed camera centers pins
+   *  it. */
   void runWindowedBA(int num_fixed_poses = 1);
   void publishLocalization(const mrpt::Clock::time_point& timestamp);
   void publishMap(const mrpt::Clock::time_point& timestamp);

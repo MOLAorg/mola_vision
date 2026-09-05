@@ -17,11 +17,24 @@ Packages:
   constant-velocity model, windowed BA with a stereo-disparity residual that
   anchors metric scale. Optional `right_camera_pose` rectifies a raw
   (non-pre-rectified) rig; `right_camera_pose.x` must be POSITIVE, i.e. the
-  right camera in the LEFT camera's frame. `currentPose()` is the physical left
+  right camera in the LEFT camera's frame. `rectify_output_size` ("W H")
+  enlarges the rectified canvas: rectification targets a PINHOLE model at the
+  source focal length, so a fisheye lens loses everything outside the frustum
+  the canvas spans, and the periphery is what constrains rotation best.
+  `imu_label` turns on gyro-aided prediction: the inter-frame rotation comes
+  from a `CObservationIMU` stream instead of the constant-velocity model
+  (translation still constant-velocity), which is what keeps tracking alive
+  through fast turns. It is a PREDICTION only - no inertial residual enters PnP
+  or BA - so a missing or late IMU degrades back to constant velocity. Needs the
+  camera- and IMU-on-robot extrinsics (from the observations or
+  `camera_pose_on_robot` / `imu_pose_on_robot`) to rotate the gyro into the
+  camera frame. `currentPose()` is the physical left
   camera; `currentRobotPose()` is the vehicle body, and needs the camera-on-robot
   extrinsic (from the observations' `cameraPose`, or `camera_pose_on_robot`).
   `mola-visual-slam-cli` runs it offline on a ROS1 bag or KITTI and writes a TUM
-  trajectory. When a `mola::NavStateFilter` module is present in the same MOLA
+  trajectory; `--input-rosbag1` may be repeated, so a separate IMU bag joins the
+  images as one time-sorted stream, and `--imu-topic` / `--imu-sensor-pose` turn
+  gyro aiding on. When a `mola::NavStateFilter` module is present in the same MOLA
   system, each localized frame's VEHICLE pose is also fused into it as its own
   odometry source (`state_estimator_frame_id`, default `visual_odom`), which is
   how visual odometry reaches `mola_lidar_odometry` -- through the estimator's

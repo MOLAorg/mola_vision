@@ -72,11 +72,21 @@ modules:
       # still describes the upright image (arc-3's front_left does).
       left_image_rotate_180: ${MOLA_VO_LEFT_ROTATE_180|false}
       right_image_rotate_180: ${MOLA_VO_RIGHT_ROTATE_180|false}
+      # Reuse the same IMU stream the smoother already gets, for the
+      # inter-frame rotation prediction: a legged robot reaches ~90 deg/s in a
+      # stride transition, which the constant-velocity model cannot anticipate,
+      # and one collapsed-tracking event injects several degrees of permanent
+      # attitude error. Any gyro suffices over a 0.1 s prediction; the stim320
+      # is the most accurate one in this dataset (set MOLA_IMU_TOPIC to it).
+      imu_label: "imu"
       max_features: 500
       min_distance: 12.0
       redetect_below: 200
       lk_win_size: 21
       lk_max_levels: 3
+      # Observations leaving the BA window are dropped without a marginalization
+      # prior, so a longer window keeps more of what pins the recent poses.
+      ba_window_size: 20
       min_pnp_points: 12
       kf_max_frames_gap: 10
       kf_min_frames_gap: 2

@@ -39,7 +39,15 @@ modules:
     execution_rate: 20 # Hz
     quit_mola_app_on_dataset_end: ${MOLA_QUIT_ON_DATASET_END|false}
     params:
-      rosbag_filename: ${MOLA_INPUT_ROSBAG1}
+      # A second bag is optional and is read as one time-sorted stream with the
+      # first: GrandTour ships each IMU in its own bag. An empty entry is
+      # skipped, so leaving MOLA_INPUT_ROSBAG1_IMU unset simply disables gyro
+      # aiding. Point it at *_stim320_imu.bag for this mission, NOT at
+      # *_alphasense_imu.bag: despite being the stereo rig's own hardware-synced
+      # IMU, that recording stops about 60 s into a 300 s mission.
+      rosbag_filename:
+        - "${MOLA_INPUT_ROSBAG1}"
+        - "${MOLA_INPUT_ROSBAG1_IMU|}"
       time_warp_scale: ${MOLA_TIME_WARP|1.0}
       start_paused: ${MOLA_DATASET_START_PAUSED|false}
       base_link_frame_id: "${MOLA_TF_BASE_LINK|base}"
@@ -58,6 +66,16 @@ modules:
           sensorLabel: image_1
           # base -> alphasense_front_right, composed the same way
           fixed_sensor_pose: "0.444776 -0.045125 0.211165 -90.0398 -0.1474 -99.8744"
+          use_fixed_sensor_pose: true
+
+        # Gyro for the inter-frame rotation prediction (see imu_label below).
+        # Harmless when the IMU bag is not loaded: the handler simply never
+        # fires and the front end falls back to constant velocity.
+        - topic: /boxi/stim320/imu
+          type: CObservationIMU
+          sensorLabel: imu
+          # base -> stim320_imu, composed from the same /tf_static chain
+          fixed_sensor_pose: "0.362496 0.034411 0.122046 -0.5870 -0.1080 0.6677"
           use_fixed_sensor_pose: true
 
   # =====================
@@ -88,11 +106,23 @@ modules:
       # directions, so every stereo match then fails and the map stays empty.
       # Uncomment for such a mission:
       # left_image_rotate_180: true
+      # Gyro-aided rotation prediction. A legged robot reaches ~90 deg/s in a
+      # single stride transition, which is 9 deg between two 10 Hz frames; the
+      # constant-velocity model cannot see that angular acceleration coming, the
+      # LK seed lands far from the true match, and tracking collapses. One such
+      # event is enough to inject several degrees of permanent attitude error
+      # into an otherwise centimetre-accurate run. Requires the IMU bag (see
+      # rosbag_filename above); without it this line is inert.
+      imu_label: imu
       max_features: 500
       min_distance: 12.0
       redetect_below: 200
       lk_win_size: 21
       lk_max_levels: 3
+      # Keyframes retained in the bundle adjustment. Observations that fall out
+      # of the window are dropped without a marginalization prior, so a longer
+      # window keeps more of the structure that pins the recent poses.
+      ba_window_size: 20
       min_pnp_points: 12
       kf_max_frames_gap: 10
       kf_min_frames_gap: 2
