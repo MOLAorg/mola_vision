@@ -195,7 +195,11 @@ BAResult mola::vision::slidingWindowBA(
         Jp.rightCols<3>() = Jproj;  // = Jproj * I
         Hpp[c] += w * Jp.transpose() * Jp;
         bp[c] += w * Jp.transpose() * e;
-        Hpl[l][c] += w * Jp.transpose() * Jl;
+        // try_emplace, not operator[]: a default-constructed Eigen matrix holds
+        // UNINITIALIZED memory, so accumulating into a fresh map slot would add
+        // to garbage - and one poisoned off-diagonal block is enough to make the
+        // whole Schur-reduced pose system meaningless.
+        Hpl[l].try_emplace(c, Mat63::Zero()).first->second += w * Jp.transpose() * Jl;
       }
 
       // --- Stereo disparity residual: d = fx * baseline / Z (Z = Xc.z). ---
@@ -220,7 +224,7 @@ BAResult mola::vision::slidingWindowBA(
           Jp_d.rightCols<3>() = Jproj_d;
           Hpp[c] += wd * Jp_d.transpose() * Jp_d;
           bp[c] += wd * Jp_d.transpose() * ed;
-          Hpl[l][c] += wd * Jp_d.transpose() * Jl_d;
+          Hpl[l].try_emplace(c, Mat63::Zero()).first->second += wd * Jp_d.transpose() * Jl_d;
         }
       }
     }
