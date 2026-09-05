@@ -50,6 +50,13 @@ mrpt::poses::CPose3D poseFromRt(const Eigen::Matrix3f& R, const Eigen::Vector3f&
   return mrpt::poses::CPose3D(H);
 }
 
+/** Rotates an image 180 degrees in place: (u,v) -> (W-1-u, H-1-v). */
+void rotate180(mrpt::img::CImage& img)
+{
+  img.flipVertical();
+  img.flipHorizontal();
+}
+
 /** Median pixel displacement between two equally-sized point sets. */
 float medianParallax(
     const std::vector<mrpt::math::TPoint2Df>& a, const std::vector<mrpt::math::TPoint2Df>& b)
@@ -117,12 +124,17 @@ void VisualSlam::initialize_frontend(const Yaml& c)
     getS("right_label", right_label_);
     getD("stereo_baseline", stereo_baseline_);
     getS("right_camera_pose", right_camera_pose_str_);
+    getS("camera_pose_on_robot", camera_pose_on_robot_str_);
+    getB("left_image_rotate_180", left_image_rotate_180_);
+    getB("right_image_rotate_180", right_image_rotate_180_);
     getI("max_features", max_features_);
     getF("min_distance", min_distance_);
     getI("redetect_below", redetect_below_);
     getI("lk_win_size", lk_win_size_);
     getI("lk_max_levels", lk_max_levels_);
     getI("min_pnp_points", min_pnp_points_);
+    getF("min_pnp_inlier_ratio", min_pnp_inlier_ratio_);
+    getI("lost_max_frames", lost_max_frames_);
     getI("ba_window_size", ba_window_size_);
     getI("cull_min_obs", cull_min_obs_);
     getF("init_min_parallax_px", init_min_parallax_px_);
@@ -146,11 +158,22 @@ void VisualSlam::initialize_frontend(const Yaml& c)
   }
   if (!right_camera_pose_str_.empty())
   {
-    right_camera_pose_ =
-        mrpt::poses::CPose3D::FromString("[" + right_camera_pose_str_ + "]");
+    right_camera_pose_ = mrpt::poses::CPose3D::FromString("[" + right_camera_pose_str_ + "]");
     MRPT_LOG_INFO_STREAM(
         "VisualSlam: right_camera_pose set (" << *right_camera_pose_
-                                               << "); incoming stereo pairs will be rectified.");
+                                              << "); incoming stereo pairs will be rectified.");
+    ASSERTMSG_(
+        right_camera_pose_->x() > 0,
+        "right_camera_pose is the pose of the RIGHT camera in the LEFT camera's frame, so its x "
+        "must be positive for a side-by-side rig (the right camera sits to the right). A negative "
+        "x describes the opposite rig and yields negative disparities.");
+  }
+  if (!camera_pose_on_robot_str_.empty())
+  {
+    camera_pose_on_robot_ = mrpt::poses::CPose3D::FromString("[" + camera_pose_on_robot_str_ + "]");
+    MRPT_LOG_INFO_STREAM(
+        "VisualSlam: camera_pose_on_robot set (" << *camera_pose_on_robot_
+                                                 << "); poses will be reported in the body frame.");
   }
   MRPT_LOG_INFO_STREAM("VisualSlam initialized (mode=" << mode_ << ").");
   MRPT_END
@@ -179,11 +202,16 @@ void VisualSlam::onNewObservation(const CObservation::ConstPtr& o)
     // Pair the left (image_0) and right (image_1) streams by timestamp.
     if (obs->sensorLabel == left_label_)
     {
+      rememberCameraPoseOnRobot(obs->cameraPose);
       obs->load();
       pending_left_     = obs->image;
       pending_left_cam_ = obs->cameraParams;
       pending_left_ts_  = obs->timestamp;
       have_left_        = true;
+      if (left_image_rotate_180_)
+      {
+        rotate180(pending_left_);
+      }
     }
     else if (obs->sensorLabel == right_label_)
     {
@@ -192,6 +220,10 @@ void VisualSlam::onNewObservation(const CObservation::ConstPtr& o)
       pending_right_cam_ = obs->cameraParams;
       pending_right_ts_  = obs->timestamp;
       have_right_        = true;
+      if (right_image_rotate_180_)
+      {
+        rotate180(pending_right_);
+      }
     }
     else
     {
@@ -217,12 +249,17 @@ void VisualSlam::onNewObservation(const CObservation::ConstPtr& o)
           stereoCam.rightCamera     = pending_right_cam_;
           stereoCam.rightCameraPose = mrpt::poses::CPose3DQuat(*right_camera_pose_).asTPose();
           rectify_map_.setFromCamParams(stereoCam);
+          // The rectified frame is rotated with respect to the physical left
+          // camera; remember that rotation so the reported trajectory can be
+          // expressed in the camera's own (and hence the robot's) frame.
+          left_cam_in_rectified_ = mrpt::poses::CPose3D(mrpt::poses::CPose3DQuat(
+              0, 0, 0, mrpt::math::CQuaternionDouble(rectify_map_.getLeftCameraRot())));
         }
         mrpt::img::CImage rectLeft;
         mrpt::img::CImage rectRight;
         rectify_map_.rectify(pending_left_, pending_right_, rectLeft, rectRight);
-        const double rectifiedBaseline =
-            std::abs(rectify_map_.getRectifiedImageParams().rightCameraPose.x);
+        // Post-rectification the pair is parallel with a pure +x baseline.
+        const double rectifiedBaseline = rectify_map_.getRectifiedImageParams().rightCameraPose.x;
         processStereoFrame(
             rectLeft, rectRight, rectify_map_.getRectifiedLeftImageParams(), rectifiedBaseline,
             pending_left_ts_);
@@ -243,6 +280,7 @@ void VisualSlam::onNewObservation(const CObservation::ConstPtr& o)
   {
     return;
   }
+  rememberCameraPoseOnRobot(obs->cameraPose);
   obs->load();
   if (obs->image.isEmpty())
   {
@@ -250,6 +288,48 @@ void VisualSlam::onNewObservation(const CObservation::ConstPtr& o)
   }
   processFrame(obs->image, obs->cameraParams, obs->timestamp);
   MRPT_END
+}
+
+void VisualSlam::rememberCameraPoseOnRobot(const mrpt::poses::CPose3D& p)
+{
+  // An explicit parameter always wins; otherwise take the first non-identity
+  // pose the dataset source provides (an identity one means "unknown", not
+  // "the camera is exactly at the body origin looking along its x axis",
+  // which no real optical frame ever is).
+  if (camera_pose_on_robot_ || !camera_pose_on_robot_str_.empty())
+  {
+    return;
+  }
+  if (p.asVectorVal().norm() < 1e-9)
+  {
+    return;
+  }
+  camera_pose_on_robot_ = p;
+  MRPT_LOG_INFO_STREAM(
+      "VisualSlam: camera-on-robot extrinsic taken from the observations ("
+      << p << "); poses will be reported in the body frame.");
+}
+
+mrpt::poses::CPose3D VisualSlam::currentPose() const
+{
+  if (!left_cam_in_rectified_)
+  {
+    return pose_wc_;
+  }
+  // pose_wc_ is T_{R0,Rt} (rectified frame). Conjugating by the constant
+  // rectified<-camera rotation turns it into T_{L0,Lt}.
+  return (-*left_cam_in_rectified_) + pose_wc_ + *left_cam_in_rectified_;
+}
+
+mrpt::poses::CPose3D VisualSlam::currentRobotPose() const
+{
+  const auto camTraj = currentPose();
+  if (!camera_pose_on_robot_)
+  {
+    return camTraj;
+  }
+  // T_{B0,Bt} = T_body_cam * T_{L0,Lt} * T_body_cam^-1.
+  return *camera_pose_on_robot_ + camTraj + (-*camera_pose_on_robot_);
 }
 
 size_t VisualSlam::numActiveLandmarks() const
@@ -293,7 +373,7 @@ mrpt::poses::CPose3D VisualSlam::processFrame(
     detectInitialFeatures(gray);
     prev_gray_ = gray;
     publishViz2D(gray);
-    return pose_wc_;
+    return currentPose();
   }
 
   if (state_ == State::INITIALIZING)
@@ -335,7 +415,7 @@ mrpt::poses::CPose3D VisualSlam::processFrame(
         publishViz3D();
       }
     }
-    return pose_wc_;
+    return currentPose();
   }
 
   // TRACKING.
@@ -371,7 +451,10 @@ mrpt::poses::CPose3D VisualSlam::processFrame(
     }
     {
       mrpt::system::CTimeLoggerEntry t5(profiler_, "keyframe.windowedBA");
-      runWindowedBA();
+      // Two fixed poses: monocular BA has no metric anchor, so fixing only one
+      // pose leaves the SCALE gauge free and the window can drift (or collapse)
+      // along it. The distance between two fixed camera centers pins it.
+      runWindowedBA(2);
     }
     frames_since_kf_ = 0;
     publishMap(timestamp);
@@ -385,7 +468,7 @@ mrpt::poses::CPose3D VisualSlam::processFrame(
     publishViz2D(gray);
     publishViz3D();
   }
-  return pose_wc_;
+  return currentPose();
 }
 
 bool VisualSlam::tryInitialize(const mrpt::img::CImage& gray)
@@ -506,6 +589,175 @@ bool VisualSlam::tryInitialize(const mrpt::img::CImage& gray)
   return true;
 }
 
+mrpt::poses::CPose3D VisualSlam::predictedPoseWc() const
+{
+  // Constant-velocity prediction: the previous frame-to-frame motion is a far
+  // better starting point than "the camera did not move", both for LK and for
+  // PnP, and it is the only sane fallback when localization fails outright.
+  return have_motion_ ? (pose_wc_ + last_motion_) : pose_wc_;
+}
+
+bool VisualSlam::solveFramePose(
+    const std::vector<mrpt::math::TPoint3Df>& worldPts,
+    const std::vector<mrpt::math::TPoint2Df>& pixels, const std::vector<size_t>& corr_idx,
+    const mrpt::img::TCamera& cam, std::vector<bool>& pnp_outlier)
+{
+  const mrpt::poses::CPose3D prev_wc = pose_wc_;
+  const mrpt::poses::CPose3D pred_wc = predictedPoseWc();
+
+  bool pose_updated = false;
+  if (static_cast<int>(worldPts.size()) >= min_pnp_points_)
+  {
+    mrpt::system::CTimeLoggerEntry tle(profiler_, "track.PnP");
+    const auto                     res = mola::vision::solvePnP(worldPts, pixels, cam, -pred_wc);
+
+    // Trust the estimate on inlier SUPPORT, not on the solver's convergence
+    // flag: hitting the iteration cap still leaves the best pose found, and
+    // dropping it silently freezes the trajectory for that frame. Conversely a
+    // converged solve that explains only a small fraction of the
+    // correspondences is a wrong local minimum, and accepting it corrupts the
+    // map beyond recovery on the very next frame.
+    const int minInliers = std::max(
+        min_pnp_points_,
+        static_cast<int>(std::ceil(min_pnp_inlier_ratio_ * static_cast<float>(worldPts.size()))));
+    const bool sane = res.pose.asVectorVal().array().isFinite().all();
+    if (res.num_inliers >= minInliers && sane)
+    {
+      pose_cw_     = res.pose;
+      pose_wc_     = -pose_cw_;
+      pose_updated = true;
+      for (size_t k = 0; k < res.inliers.size(); ++k)
+      {
+        if (!res.inliers[k])
+        {
+          pnp_outlier[corr_idx[k]] = true;
+        }
+      }
+    }
+    else
+    {
+      MRPT_LOG_THROTTLE_WARN_STREAM(
+          2.0, "VisualSlam: PnP kept only " << res.num_inliers << " of " << worldPts.size()
+                                            << " correspondences (need " << minInliers
+                                            << "); dead-reckoning this frame.");
+    }
+    MRPT_LOG_DEBUG_STREAM(
+        "PnP frame=" << frame_count_ << " tracked=" << track_pts_.size()
+                     << " corr=" << worldPts.size() << " inliers=" << res.num_inliers
+                     << " converged=" << res.converged << " iters=" << res.iterations
+                     << " cost=" << res.final_cost);
+  }
+  else
+  {
+    MRPT_LOG_THROTTLE_WARN_STREAM(
+        2.0, "VisualSlam: only " << worldPts.size()
+                                 << " mapped features tracked into this frame (need "
+                                 << min_pnp_points_ << "); dead-reckoning.");
+  }
+
+  frames_without_pose_ = pose_updated ? 0 : frames_without_pose_ + 1;
+
+  if (!pose_updated)
+  {
+    // A short dropout is worth bridging with the motion model rather than
+    // standing still. A sustained one is NOT: the map is then no longer
+    // consistent with the images, so extrapolation runs the pose away from a
+    // map that stays put, new landmarks get triangulated from a wildly wrong
+    // baseline, and the state diverges (to infinity, and then to NaN). Past
+    // the same threshold that triggers a stereo map restart, hold the pose and
+    // drop the velocity instead.
+    if (frames_without_pose_ <= lost_max_frames_)
+    {
+      pose_wc_ = pred_wc;
+      pose_cw_ = -pose_wc_;
+    }
+    else
+    {
+      have_motion_ = false;
+      last_motion_ = mrpt::poses::CPose3D::Identity();
+      return false;
+    }
+  }
+
+  last_motion_ = pose_wc_ - prev_wc;
+  have_motion_ = true;
+  return pose_updated;
+}
+
+void VisualSlam::predictTrackedPixels(std::vector<mrpt::math::TPoint2Df>& out) const
+{
+  out = track_pts_;
+  if (!have_motion_)
+  {
+    return;
+  }
+  const auto   pred_cw = -predictedPoseWc();
+  const double fx      = camera_.fx();
+  const double fy      = camera_.fy();
+  const double cx      = camera_.cx();
+  const double cy      = camera_.cy();
+  const double maxX    = static_cast<double>(camera_.ncols) - 1.0;
+  const double maxY    = static_cast<double>(camera_.nrows) - 1.0;
+
+  for (size_t i = 0; i < track_pts_.size(); ++i)
+  {
+    const int lm = track_lm_[i];
+    if (lm < 0 || landmarks_[lm].bad)
+    {
+      continue;  // no 3D position to project: keep "did not move"
+    }
+    const auto Xc = pred_cw.composePoint(mrpt::math::TPoint3D(landmarks_[lm].pos));
+    if (Xc.z < 0.1)
+    {
+      continue;
+    }
+    const double u = fx * Xc.x / Xc.z + cx;
+    const double v = fy * Xc.y / Xc.z + cy;
+    if (u < 0 || v < 0 || u > maxX || v > maxY || !std::isfinite(u) || !std::isfinite(v))
+    {
+      continue;
+    }
+    out[i] = {static_cast<float>(u), static_cast<float>(v)};
+  }
+}
+
+void VisualSlam::restartMapHere(
+    const mrpt::img::CImage& grayL, const mrpt::img::CImage& grayR, const mrpt::img::TCamera& cam,
+    double baseline)
+{
+  MRPT_LOG_WARN_STREAM(
+      "VisualSlam: tracking lost for " << frames_without_pose_
+                                       << " frames; restarting the local map at the current "
+                                          "dead-reckoned pose (frame "
+                                       << frame_count_ << ").");
+  landmarks_.clear();
+  keyframes_.clear();
+  track_pts_.clear();
+  track_lm_.clear();
+  track_lastkf_pix_.clear();
+  track_has_lastkf_.clear();
+  // The gap invalidates the velocity estimate: extrapolating across it is
+  // exactly what turns a short dropout into a diverging trajectory.
+  have_motion_ = false;
+  last_motion_ = mrpt::poses::CPose3D::Identity();
+
+  mola::vision::GridDistributorParams gp;
+  gp.max_corners   = max_features_;
+  gp.min_distance  = min_distance_;
+  const auto feats = mola::vision::GridFeatureDistributor(gp).detect(grayL, {});
+  {
+    mrpt::system::CTimeLoggerEntry tle(profiler_, "stereo.match");
+    addStereoLandmarks(grayL, grayR, cam, baseline, feats);
+  }
+  if (landmarks_.size() < 20)
+  {
+    return;  // too little texture here; try again next frame
+  }
+  insertCurrentKeyframeStereo(grayL, grayR, cam, baseline);
+  frames_since_kf_     = 0;
+  frames_without_pose_ = 0;
+}
+
 void VisualSlam::trackAndLocalize(const mrpt::img::CImage& gray)
 {
   using mrpt::math::TPoint2Df;
@@ -541,23 +793,7 @@ void VisualSlam::trackAndLocalize(const mrpt::img::CImage& gray)
   }
 
   std::vector<bool> pnp_outlier(next_pts.size(), false);
-  if (static_cast<int>(worldPts.size()) >= min_pnp_points_)
-  {
-    mrpt::system::CTimeLoggerEntry tle(profiler_, "track.PnP");
-    const auto res = mola::vision::solvePnP(worldPts, pixels, camera_, pose_cw_);
-    if (res.converged)
-    {
-      pose_cw_ = res.pose;
-      pose_wc_ = -pose_cw_;
-    }
-    for (size_t k = 0; k < res.inliers.size(); ++k)
-    {
-      if (!res.inliers[k])
-      {
-        pnp_outlier[corr_idx[k]] = true;
-      }
-    }
-  }
+  solveFramePose(worldPts, pixels, corr_idx, camera_, pnp_outlier);
 
   // Compact: drop lost / rejected, cull spurious untriangulated candidates.
   std::vector<TPoint2Df> kept_pts;
@@ -635,7 +871,11 @@ int VisualSlam::addStereoLandmarks(
       continue;
     }
     const auto Xw = pose_wc_.composePoint(mrpt::math::TPoint3D(*Xc));
-    Landmark   lm;
+    if (!std::isfinite(Xw.x) || !std::isfinite(Xw.y) || !std::isfinite(Xw.z))
+    {
+      continue;
+    }
+    Landmark lm;
     lm.pos          = mrpt::math::TPoint3Df(Xw);
     lm.observations = 1;
     track_pts_.push_back(left_feats[i]);
@@ -686,7 +926,7 @@ mrpt::poses::CPose3D VisualSlam::processStereoFrame(
     if (landmarks_.size() < 20)
     {
       prev_gray_ = grayL;
-      return pose_wc_;  // not enough stereo matches yet; wait
+      return currentPose();  // not enough stereo matches yet; wait
     }
     insertCurrentKeyframeStereo(grayL, grayR, cam, baseline);
     state_           = State::TRACKING;
@@ -697,15 +937,21 @@ mrpt::poses::CPose3D VisualSlam::processStereoFrame(
     publishMap(timestamp);
     publishViz2D(grayL);
     publishViz3D();
-    return pose_wc_;
+    return currentPose();
   }
 
   // -------- Tracking: LK (left t-1 -> left t) + PnP --------
+  // Seed the LK search with where the constant-velocity model says each mapped
+  // feature should land. Starting from "the point did not move" is what breaks
+  // first under the fast turns of a legged robot: the true displacement then
+  // exceeds the coarsest pyramid level's basin of attraction.
   std::vector<TPoint2Df>                 next_pts;
   std::vector<mola::vision::TrackStatus> status;
   mola::vision::LKParams                 lk;
   lk.win_size   = lk_win_size_;
   lk.max_levels = lk_max_levels_;
+  predictTrackedPixels(next_pts);
+  lk.use_initial_guess = true;
   profiler_.enter("track.LK");
   mola::vision::calcOpticalFlowPyrLK(prev_gray_, grayL, track_pts_, next_pts, status, lk);
   profiler_.leave("track.LK");
@@ -730,22 +976,19 @@ mrpt::poses::CPose3D VisualSlam::processStereoFrame(
   }
 
   std::vector<bool> pnp_outlier(next_pts.size(), false);
-  if (static_cast<int>(worldPts.size()) >= min_pnp_points_)
+  solveFramePose(worldPts, pixels, corr_idx, cam, pnp_outlier);
+
+  if (frames_without_pose_ > lost_max_frames_)
   {
-    mrpt::system::CTimeLoggerEntry tlp(profiler_, "track.PnP");
-    const auto                     res = mola::vision::solvePnP(worldPts, pixels, cam, pose_cw_);
-    if (res.converged)
-    {
-      pose_cw_ = res.pose;
-      pose_wc_ = -pose_cw_;
-    }
-    for (size_t k = 0; k < res.inliers.size(); ++k)
-    {
-      if (!res.inliers[k])
-      {
-        pnp_outlier[corr_idx[k]] = true;
-      }
-    }
+    // The map and the images no longer agree, and every further frame would be
+    // built on a pose nothing supports. Rebuild the local map here instead of
+    // dead-reckoning indefinitely, which diverges without bound.
+    restartMapHere(grayL, grayR, cam, baseline);
+    prev_gray_ = grayL;
+    trajectory_.push_back(pose_wc_.translation());
+    publishLocalization(timestamp);
+    publishMap(timestamp);
+    return currentPose();
   }
 
   // Compact tracking arrays (drop lost / rejected; cull weak landmarks).
@@ -817,7 +1060,7 @@ mrpt::poses::CPose3D VisualSlam::processStereoFrame(
     publishViz2D(grayL);
     publishViz3D();
   }
-  return pose_wc_;
+  return currentPose();
 }
 
 void VisualSlam::spawnTriangulatedLandmarks()
@@ -894,6 +1137,10 @@ void VisualSlam::spawnTriangulatedLandmarks()
       continue;  // insufficient parallax
     }
 
+    if (!std::isfinite(X.x) || !std::isfinite(X.y) || !std::isfinite(X.z))
+    {
+      continue;
+    }
     Landmark lm;
     lm.pos          = X;
     lm.observations = 1;
@@ -1041,8 +1288,11 @@ void VisualSlam::publishLocalization(const mrpt::Clock::time_point& timestamp)
   lu.timestamp       = timestamp;
   lu.method          = "visual_slam";
   lu.reference_frame = "map";
-  lu.child_frame     = "base_link";
-  lu.pose            = pose_wc_.asTPose();
+  // Only claim "base_link" when the camera-on-robot extrinsic is actually
+  // known; otherwise this is the camera's own trajectory and saying otherwise
+  // silently corrupts anything that fuses it.
+  lu.child_frame = camera_pose_on_robot_ ? "base_link" : "camera";
+  lu.pose        = currentRobotPose().asTPose();
   advertiseUpdatedLocalization(lu);
 }
 
