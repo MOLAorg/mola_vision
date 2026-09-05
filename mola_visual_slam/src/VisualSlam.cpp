@@ -15,9 +15,11 @@
 #include <mrpt/containers/yaml.h>
 #include <mrpt/core/Clock.h>
 #include <mrpt/img/TColor.h>
+#include <mrpt/img/TStereoCamera.h>
 #include <mrpt/maps/CSimplePointsMap.h>
 #include <mrpt/math/CMatrixFixed.h>
 #include <mrpt/obs/CObservationImage.h>
+#include <mrpt/poses/CPose3DQuat.h>
 #include <mrpt/viz/CFrustum.h>
 #include <mrpt/viz/CPointCloud.h>
 #include <mrpt/viz/CSetOfLines.h>
@@ -114,6 +116,7 @@ void VisualSlam::initialize_frontend(const Yaml& c)
     getS("left_label", left_label_);
     getS("right_label", right_label_);
     getD("stereo_baseline", stereo_baseline_);
+    getS("right_camera_pose", right_camera_pose_str_);
     getI("max_features", max_features_);
     getF("min_distance", min_distance_);
     getI("redetect_below", redetect_below_);
@@ -140,6 +143,14 @@ void VisualSlam::initialize_frontend(const Yaml& c)
   {
     MRPT_LOG_WARN_STREAM("VisualSlam: unknown mode '" << mode_ << "'; using 'mono'.");
     mode_ = "mono";
+  }
+  if (!right_camera_pose_str_.empty())
+  {
+    right_camera_pose_ =
+        mrpt::poses::CPose3D::FromString("[" + right_camera_pose_str_ + "]");
+    MRPT_LOG_INFO_STREAM(
+        "VisualSlam: right_camera_pose set (" << *right_camera_pose_
+                                               << "); incoming stereo pairs will be rectified.");
   }
   MRPT_LOG_INFO_STREAM("VisualSlam initialized (mode=" << mode_ << ").");
   MRPT_END
@@ -177,9 +188,10 @@ void VisualSlam::onNewObservation(const CObservation::ConstPtr& o)
     else if (obs->sensorLabel == right_label_)
     {
       obs->load();
-      pending_right_    = obs->image;
-      pending_right_ts_ = obs->timestamp;
-      have_right_       = true;
+      pending_right_     = obs->image;
+      pending_right_cam_ = obs->cameraParams;
+      pending_right_ts_  = obs->timestamp;
+      have_right_        = true;
     }
     else
     {
@@ -191,8 +203,35 @@ void VisualSlam::onNewObservation(const CObservation::ConstPtr& o)
             mrpt::Clock::toDouble(pending_left_ts_) - mrpt::Clock::toDouble(pending_right_ts_)) <
             0.005)
     {
-      processStereoFrame(
-          pending_left_, pending_right_, pending_left_cam_, stereo_baseline_, pending_left_ts_);
+      if (right_camera_pose_)
+      {
+        // Raw rig, not pre-rectified (e.g. a fisheye multi-camera bag with no
+        // per-camera TF): build (once) and apply a CStereoRectifyMap from
+        // each camera's own intrinsics/distortion plus the fixed extrinsic,
+        // so processStereoFrame() keeps receiving what it always expected -
+        // a rectified pair sharing one pinhole TCamera and a pure baseline.
+        if (!rectify_map_.isSet())
+        {
+          mrpt::img::TStereoCamera stereoCam;
+          stereoCam.leftCamera      = pending_left_cam_;
+          stereoCam.rightCamera     = pending_right_cam_;
+          stereoCam.rightCameraPose = mrpt::poses::CPose3DQuat(*right_camera_pose_).asTPose();
+          rectify_map_.setFromCamParams(stereoCam);
+        }
+        mrpt::img::CImage rectLeft;
+        mrpt::img::CImage rectRight;
+        rectify_map_.rectify(pending_left_, pending_right_, rectLeft, rectRight);
+        const double rectifiedBaseline =
+            std::abs(rectify_map_.getRectifiedImageParams().rightCameraPose.x);
+        processStereoFrame(
+            rectLeft, rectRight, rectify_map_.getRectifiedLeftImageParams(), rectifiedBaseline,
+            pending_left_ts_);
+      }
+      else
+      {
+        processStereoFrame(
+            pending_left_, pending_right_, pending_left_cam_, stereo_baseline_, pending_left_ts_);
+      }
       have_left_  = false;
       have_right_ = false;
     }
