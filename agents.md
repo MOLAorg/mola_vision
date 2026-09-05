@@ -21,7 +21,13 @@ Packages:
   camera; `currentRobotPose()` is the vehicle body, and needs the camera-on-robot
   extrinsic (from the observations' `cameraPose`, or `camera_pose_on_robot`).
   `mola-visual-slam-cli` runs it offline on a ROS1 bag or KITTI and writes a TUM
-  trajectory. Tests: `test_stereo_synthetic` (analytically ray-traced textured
+  trajectory. When a `mola::NavStateFilter` module is present in the same MOLA
+  system, each localized frame's VEHICLE pose is also fused into it as its own
+  odometry source (`state_estimator_frame_id`, default `visual_odom`), which is
+  how visual odometry reaches `mola_lidar_odometry` -- through the estimator's
+  motion prior, not through any direct coupling. See the
+  `lidar_visual_odometry_from_{kitti,grandtour}.yaml` launch files, both with a
+  `MOLA_WITH_VISUAL_ODOM` A/B switch. Tests: `test_stereo_synthetic` (analytically ray-traced textured
   room; ground-truth-exact, no dataset needed) plus KITTI/TUM integration tests
   that skip unless their env vars are set.
 
