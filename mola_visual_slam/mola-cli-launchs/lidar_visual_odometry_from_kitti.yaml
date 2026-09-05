@@ -1,0 +1,112 @@
+# -----------------------------------------------------------------------------
+#                        MOLA system definition
+# LiDAR odometry AND stereo visual odometry, fused in the state-estimation
+# smoother, from the KITTI odometry dataset.
+#
+# Data flow:
+#   KITTI lidar     --> mola::LidarOdometry  --+
+#                                              +--> StateEstimationSmoother
+#   KITTI image_0/1 --> mola::VisualSlam   ----+          (fuses both)
+#
+# Both front-ends push absolute poses into the smoother under their OWN frame
+# id ("map" for the LiDAR, "visual_odom" for the camera), so the smoother
+# estimates the transform between those frames along with the vehicle state.
+# The LiDAR front-end then takes its ICP motion prior from the fused estimate,
+# which is how the visual constraint feeds back into the LiDAR odometry.
+#
+# Usage:
+#   KITTI_BASE_DIR=/path/to/kitti KITTI_SEQ=00 \
+#   MOLA_SAVE_TRAJECTORY=true MOLA_TUM_TRAJECTORY_OUTPUT=out.tum \
+#   mola-cli lidar_visual_odometry_from_kitti.yaml
+#
+# Set MOLA_WITH_VISUAL_ODOM=false to run the very same system with the visual
+# front-end disabled: that is the A/B baseline this file exists to make easy.
+# -----------------------------------------------------------------------------
+
+modules:
+  # =====================
+  # MolaViz
+  # =====================
+  - name: viz
+    type: ${MOLA_GUI_MODULE|mola::MolaVizImGui}
+    enabled: ${MOLA_WITH_GUI|true}
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_VIZ|INFO}"
+    params:
+      imgui_app_name: lidar_visual_odometry_from_kitti
+
+  # =====================
+  # KittiOdometryDataset (publishes lidar + the rectified stereo pair)
+  # =====================
+  - name: dataset_input
+    type: mola::KittiOdometryDataset
+    execution_rate: 20 # Hz
+    quit_mola_app_on_dataset_end: ${MOLA_QUIT_ON_DATASET_END|true}
+    params:
+      base_dir: ${KITTI_BASE_DIR}
+      sequence: ${KITTI_SEQ}
+      time_warp_scale: ${MOLA_TIME_WARP|1.0}
+      start_paused: ${MOLA_DATASET_START_PAUSED|false}
+      publish_lidar: true
+      publish_image_0: true
+      publish_image_1: true
+      publish_ground_truth: true
+
+  # =====================
+  # LiDAR odometry front-end
+  # =====================
+  - name: lidar_odom
+    type: mola::LidarOdometry
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_LO|INFO}"
+    raw_data_source: "dataset_input"
+    params: "${MOLA_ODOMETRY_PIPELINE_YAML|../../../mola_lidar_odometry/pipelines/lidar3d-default.yaml}"
+
+  # =====================
+  # Stereo visual odometry front-end
+  # =====================
+  - name: visual_slam
+    type: mola::VisualSlam
+    enabled: ${MOLA_WITH_VISUAL_ODOM|true}
+    raw_data_source: "dataset_input"
+    execution_rate: 20 # Hz
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_VO|INFO}"
+    params:
+      mode: stereo
+      left_label: image_0
+      right_label: image_1
+      # KITTI's image_0/image_1 are already rectified and share one pinhole
+      # model, so no right_camera_pose (rectification) is needed here.
+      stereo_baseline: ${KITTI_STEREO_BASELINE|0.537}
+      max_features: 500
+      min_distance: 12.0
+      redetect_below: 200
+      lk_win_size: 21
+      lk_max_levels: 3
+      min_pnp_points: 12
+      kf_max_frames_gap: 10
+      kf_min_frames_gap: 2
+      kf_min_tracked: 120
+      kf_min_tracked_ratio: 0.6
+      # The camera-on-robot extrinsic comes from the dataset itself (KITTI's
+      # calib.txt "Tr"), carried on each CObservationImage, so the poses handed
+      # to the estimator are the VEHICLE's and not the camera's.
+      fuse_into_state_estimator: true
+      state_estimator_frame_id: "${MOLA_VO_FRAME_ID|visual_odom}"
+      # Per-frame quality of one visual pose, NOT the drift of the whole
+      # trajectory: the smoother solves for this source's frame transform
+      # separately. Loose enough that the LiDAR still leads where both agree.
+      fuse_sigma_xyz: ${MOLA_VO_SIGMA_XYZ|0.10}
+      fuse_sigma_angles_deg: ${MOLA_VO_SIGMA_ANG_DEG|0.5}
+      fuse_decimation: ${MOLA_VO_FUSE_DECIMATION|1}
+      publish_viz_2d: ${MOLA_WITH_GUI|true}
+      publish_viz_3d: false
+      viz2d_title: Visual odometry (stereo, KITTI)
+      viz2d_win_pos: 10 60 1000 350 # [x y width height]
+
+  # =====================
+  # State estimation: the smoother, which is what fuses the two front-ends
+  # =====================
+  - name: state_estimation
+    type: "${MOLA_STATE_ESTIMATOR|mola::state_estimation_smoother::StateEstimationSmoother}"
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_STATE_ESTIMATOR|INFO}"
+    raw_data_source: "dataset_input"
+    params: "${MOLA_STATE_ESTIMATOR_YAML|../../../mola_state_estimation/mola_state_estimation_smoother/params/state-estimation-smoother.yaml}"
