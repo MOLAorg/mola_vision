@@ -68,3 +68,10 @@ a `COLCON_IGNORE` marker; build a single package with `--base-paths .`.
   over-alignment).
 - Public APIs use MRPT types so the wider MRPT/MOLA audience can reuse them.
 - Working plan with task checklist: `~/plans/mola_vision_plan.md`.
+- `mola::VisualSlam` does all its work synchronously in `onNewObservation()`
+  (`spinOnce()` is a no-op), so it is deterministic and can run as an extra
+  front-end inside another app's loop. `mola_visual_slam/params/*.yaml` are
+  standalone parameter files for exactly that: `mola-lidar-odometry-cli
+  --module mola::VisualSlam --module-param-file <file>` runs LiDAR and visual
+  odometry into one state estimator, in a batch tool that drops no scans. The
+  `mola-cli-launchs/*.yaml` files carry the same keys inline instead.
