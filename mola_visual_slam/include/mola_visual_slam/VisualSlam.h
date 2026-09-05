@@ -9,6 +9,7 @@
 #include <mola_kernel/interfaces/LocalizationSourceBase.h>
 #include <mola_kernel/interfaces/MapSourceBase.h>
 #include <mrpt/img/CImage.h>
+#include <mrpt/img/CStereoRectifyMap.h>
 #include <mrpt/img/TCamera.h>
 #include <mrpt/math/TPoint2D.h>
 #include <mrpt/math/TPoint3D.h>
@@ -16,6 +17,7 @@
 #include <mrpt/system/CTimeLogger.h>
 
 #include <deque>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -114,6 +116,15 @@ class VisualSlam : public mola::FrontEndBase,
   std::string left_label_      = "image_0";  ///< sensor label of the left image
   std::string right_label_     = "image_1";  ///< sensor label of the right image
   double      stereo_baseline_ = 0.537;  ///< stereo baseline [m] (default: KITTI)
+  /** Right camera pose relative to the left camera ("x y z yaw_deg pitch_deg
+   *  roll_deg"), for rigs whose raw images are NOT pre-rectified (unlike
+   *  KITTI's image_0/image_1). When set, the two cameras' own \c cameraParams
+   *  (as carried by each CObservationImage, e.g. from a CameraInfo topic) are
+   *  used to build a CStereoRectifyMap once, and every incoming pair is
+   *  rectified before being handed to processStereoFrame(). Leave empty (the
+   *  default) to keep the old behavior: raw images are assumed already
+   *  rectified and sharing the left camera's intrinsics. */
+  std::string right_camera_pose_str_;
   int         max_features_    = 400;
   float       min_distance_    = 12.0f;
   int         redetect_below_  = 150;
@@ -181,10 +192,15 @@ class VisualSlam : public mola::FrontEndBase,
   mrpt::img::CImage       pending_left_;
   mrpt::img::CImage       pending_right_;
   mrpt::img::TCamera      pending_left_cam_;
+  mrpt::img::TCamera      pending_right_cam_;
   mrpt::Clock::time_point pending_left_ts_{};
   mrpt::Clock::time_point pending_right_ts_{};
   bool                    have_left_  = false;
   bool                    have_right_ = false;
+
+  // ---- optional stereo rectification (unrectified rigs only) ----
+  std::optional<mrpt::poses::CPose3D> right_camera_pose_;  ///< parsed once, from right_camera_pose_str_
+  mrpt::img::CStereoRectifyMap        rectify_map_;
 
   // ---- profiling ----
   mrpt::system::CTimeLogger profiler_{true, "VisualSlam"};
