@@ -73,12 +73,15 @@ struct Cli
   Opt<double>      arg_progressBarPeriod;
 
 #if defined(HAVE_MOLA_INPUT_ROSBAG1)
-  Opt<std::string> argRosbag1;
-  Opt<std::string> arg_leftTopic;
-  Opt<std::string> arg_rightTopic;
-  Opt<std::string> arg_leftSensorPose;
-  Opt<std::string> arg_rightSensorPose;
+  Opt<std::vector<std::string>> argRosbag1;
+  Opt<std::string>              arg_leftTopic;
+  Opt<std::string>              arg_rightTopic;
+  Opt<std::string>              arg_leftSensorPose;
+  Opt<std::string>              arg_rightSensorPose;
+  Opt<std::string>              arg_imuTopic;
+  Opt<std::string>              arg_imuSensorPose;
 #endif
+  Opt<std::string> arg_imuLabel;
 
 #if defined(HAVE_MOLA_INPUT_KITTI)
   Opt<std::string> argKittiSeq;
@@ -147,10 +150,21 @@ struct Cli
                "to disable. {Default: print on (almost) every processed entry}")
             ->check(CLI::Range(0.0, 100.0));
 
+    arg_imuLabel.value = "imu";
+    arg_imuLabel.opt =
+        cmd.add_option(
+               "--imu-sensor-label", arg_imuLabel.value,
+               "sensorLabel VisualSlam reads gyroscope data from, for the gyro-aided "
+               "inter-frame rotation prediction. Only takes effect together with the "
+               "module's own 'imu_label' parameter (or --imu-topic, which sets it).")
+            ->capture_default_str();
+
 #if defined(HAVE_MOLA_INPUT_ROSBAG1)
     argRosbag1.opt = cmd.add_option(
                             "--input-rosbag1", argRosbag1.value,
-                            "INPUT DATASET: rosbag1. Input dataset in ROS 1 bag format {*.bag}")
+                            "INPUT DATASET: rosbag1. Input dataset in ROS 1 bag format {*.bag}. "
+                            "May be given more than once: all bags are read as one time-sorted "
+                            "stream, which is how a separate IMU bag joins the images.")
                          ->option_text("dataset.bag");
 
     arg_leftTopic.opt = cmd.add_option(
@@ -169,6 +183,17 @@ struct Cli
     arg_rightSensorPose.opt = cmd.add_option(
         "--right-sensor-pose", arg_rightSensorPose.value,
         "Same as --left-sensor-pose, for the right camera (stereo mode only)");
+
+    arg_imuTopic.opt = cmd.add_option(
+        "--imu-topic", arg_imuTopic.value,
+        "rosbag1 topic with the gyroscope (sensor_msgs/Imu), for the gyro-aided rotation "
+        "prediction. Enables it: also sets the module's 'imu_label'.");
+
+    arg_imuSensorPose.opt = cmd.add_option(
+        "--imu-sensor-pose", arg_imuSensorPose.value,
+        "Overrides whatever /tf says about the IMU pose on the vehicle: "
+        "'x y z yaw_deg pitch_deg roll_deg'. Must be in the same body frame as "
+        "--left-sensor-pose, since the two chain into the IMU-to-camera rotation.");
 #endif
 
 #if defined(HAVE_MOLA_INPUT_KITTI)
@@ -207,7 +232,8 @@ std::shared_ptr<mola::OfflineDatasetSource> dataset_from_kitti(
 
 #if defined(HAVE_MOLA_INPUT_ROSBAG1)
 std::shared_ptr<mola::OfflineDatasetSource> dataset_from_rosbag1(
-    Cli& cli, const std::string& rosbag1file, const mrpt::system::VerbosityLevel logLevel)
+    Cli& cli, const std::vector<std::string>& rosbag1files,
+    const mrpt::system::VerbosityLevel logLevel)
 {
   ASSERTMSG_(
       cli.arg_leftTopic.isSet(),
@@ -236,15 +262,32 @@ std::shared_ptr<mola::OfflineDatasetSource> dataset_from_rosbag1(
                      "\"\n          use_fixed_sensor_pose: true";
     }
   }
+  if (cli.arg_imuTopic.isSet())
+  {
+    sensorsYaml += "\n        - topic: '" + cli.arg_imuTopic.getValue() +
+                   "'\n          type: CObservationIMU\n          sensorLabel: '" +
+                   cli.arg_imuLabel.getValue() + "'";
+    if (cli.arg_imuSensorPose.isSet())
+    {
+      sensorsYaml += "\n          fixed_sensor_pose: \"" + cli.arg_imuSensorPose.getValue() +
+                     "\"\n          use_fixed_sensor_pose: true";
+    }
+  }
+
+  std::string bagsYaml;
+  for (const auto& f : rosbag1files)
+  {
+    bagsYaml += "\n        - '" + f + "'";
+  }
 
   const auto cfg = mola::Yaml::FromText(mola::parse_yaml(mrpt::format(
       R""""(
     params:
-      rosbag_filename: '%s'
+      rosbag_filename:%s
       base_link_frame_id: '%s'
       sensors:%s
 )"""",
-      rosbag1file.c_str(), cli.arg_baseLinkName.getValue().c_str(), sensorsYaml.c_str())));
+      bagsYaml.c_str(), cli.arg_baseLinkName.getValue().c_str(), sensorsYaml.c_str())));
 
   o->initialize(cfg);
   return o;
@@ -295,6 +338,18 @@ int main_visual_slam(Cli& cli)
   // and VisualSlam's own left_label/right_label without repeating them:
   cfg["params"]["left_label"]  = cli.arg_leftLabel.getValue();
   cfg["params"]["right_label"] = cli.arg_rightLabel.getValue();
+#if defined(HAVE_MOLA_INPUT_ROSBAG1)
+  // Asking for an IMU topic is the whole intent, so it also turns the module's
+  // gyro aiding on rather than needing the same fact restated in the YAML.
+  if (cli.arg_imuTopic.isSet())
+  {
+    cfg["params"]["imu_label"] = cli.arg_imuLabel.getValue();
+    if (cli.arg_imuSensorPose.isSet())
+    {
+      cfg["params"]["imu_pose_on_robot"] = cli.arg_imuSensorPose.getValue();
+    }
+  }
+#endif
   vslam->initialize(cfg);
 
   // Select dataset input:
@@ -307,7 +362,7 @@ int main_visual_slam(Cli& cli)
   else
 #endif
 #if defined(HAVE_MOLA_INPUT_ROSBAG1)
-      if (cli.argRosbag1.isSet())
+      if (cli.argRosbag1.isSet() && !cli.argRosbag1.getValue().empty())
   {
     dataset = dataset_from_rosbag1(cli, cli.argRosbag1.getValue(), logLevel);
   }
@@ -348,13 +403,23 @@ int main_visual_slam(Cli& cli)
     const auto sf = dataset->datasetGetObservations(i);
     ASSERT_(sf);
 
+    // Feed everything the entry carries, in order: besides the images, the
+    // module also consumes an IMU stream when one is configured.
+    for (const auto& o : *sf)
+    {
+      if (o)
+      {
+        vslam->onNewObservation(o);
+      }
+    }
+
+    // Only an image entry advances the trajectory; an IMU-only entry must not
+    // duplicate the previous pose at a new timestamp.
     mrpt::obs::CObservation::Ptr obs = sf->getObservationByClass<mrpt::obs::CObservationImage>();
     if (!obs)
     {
       continue;
     }
-
-    vslam->onNewObservation(obs);
 
     if (vslam->isInitialized())
     {
@@ -411,6 +476,9 @@ int main_visual_slam(Cli& cli)
   }
 
   vslam->profiler().dumpAllStats();
+
+  std::cout << "\nFrames with a gyro-measured rotation prediction: " << vslam->numGyroPredictions()
+            << "\n";
 
   if (cli.arg_outPath.isSet())
   {

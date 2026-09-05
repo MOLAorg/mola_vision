@@ -50,6 +50,22 @@ mrpt::poses::CPose3D poseFromRt(const Eigen::Matrix3f& R, const Eigen::Vector3f&
   return mrpt::poses::CPose3D(H);
 }
 
+/** Rodrigues exponential map of a rotation vector (axis * angle, radians). */
+Eigen::Matrix3d expSO3(const Eigen::Vector3d& w)
+{
+  const double    theta = w.norm();
+  Eigen::Matrix3d K;
+  K << 0, -w.z(), w.y(), w.z(), 0, -w.x(), -w.y(), w.x(), 0;
+  if (theta < 1e-9)
+  {
+    // Second-order series: exact enough well below the angle where the
+    // trigonometric form loses precision, and it stays a rotation.
+    return Eigen::Matrix3d::Identity() + K + 0.5 * K * K;
+  }
+  const Eigen::Matrix3d Kn = K / theta;
+  return Eigen::Matrix3d::Identity() + std::sin(theta) * Kn + (1 - std::cos(theta)) * Kn * Kn;
+}
+
 /** Rotates an image 180 degrees in place: (u,v) -> (W-1-u, H-1-v). */
 void rotate180(mrpt::img::CImage& img)
 {
@@ -125,18 +141,24 @@ void VisualSlam::initialize_frontend(const Yaml& c)
     getD("stereo_baseline", stereo_baseline_);
     getS("right_camera_pose", right_camera_pose_str_);
     getS("camera_pose_on_robot", camera_pose_on_robot_str_);
+    getS("imu_label", imu_label_);
+    getS("imu_pose_on_robot", imu_pose_on_robot_str_);
+    getD("imu_max_gap", imu_max_gap_);
     getB("left_image_rotate_180", left_image_rotate_180_);
     getB("right_image_rotate_180", right_image_rotate_180_);
+    getS("rectify_output_size", rectify_output_size_str_);
     getB("fuse_into_state_estimator", fuse_into_state_estimator_);
     getS("state_estimator_frame_id", state_estimator_frame_id_);
     getD("fuse_sigma_xyz", fuse_sigma_xyz_);
     getD("fuse_sigma_angles_deg", fuse_sigma_angles_deg_);
     getI("fuse_decimation", fuse_decimation_);
+    getF("max_landmark_depth", max_landmark_depth_);
     getI("max_features", max_features_);
     getF("min_distance", min_distance_);
     getI("redetect_below", redetect_below_);
     getI("lk_win_size", lk_win_size_);
     getI("lk_max_levels", lk_max_levels_);
+    getF("lk_fb_max_error_px", lk_fb_max_error_px_);
     getI("min_pnp_points", min_pnp_points_);
     getF("min_pnp_inlier_ratio", min_pnp_inlier_ratio_);
     getI("lost_max_frames", lost_max_frames_);
@@ -180,6 +202,16 @@ void VisualSlam::initialize_frontend(const Yaml& c)
         "VisualSlam: camera_pose_on_robot set (" << *camera_pose_on_robot_
                                                  << "); poses will be reported in the body frame.");
   }
+  if (!imu_pose_on_robot_str_.empty())
+  {
+    imu_pose_on_robot_ = mrpt::poses::CPose3D::FromString("[" + imu_pose_on_robot_str_ + "]");
+  }
+  if (!imu_label_.empty())
+  {
+    MRPT_LOG_INFO_STREAM(
+        "VisualSlam: gyro aiding enabled on IMU stream '"
+        << imu_label_ << "'; the inter-frame rotation prediction will come from the gyroscope.");
+  }
   // Attach to a state-estimation module, if this MOLA system has one, so the
   // visual poses can be fused with the other odometry sources. Optional: this
   // module is perfectly usable standalone (tests, mola-visual-slam-cli), where
@@ -221,6 +253,14 @@ void VisualSlam::onNewObservation(const CObservation::ConstPtr& o)
   if (!o)
   {
     return;
+  }
+  if (!imu_label_.empty() && o->sensorLabel == imu_label_)
+  {
+    if (auto imu = std::dynamic_pointer_cast<const mrpt::obs::CObservationIMU>(o); imu)
+    {
+      handleImuObservation(*imu);
+      return;
+    }
   }
   auto obs = std::dynamic_pointer_cast<const mrpt::obs::CObservationImage>(o);
   if (!obs)
@@ -279,12 +319,31 @@ void VisualSlam::onNewObservation(const CObservation::ConstPtr& o)
           stereoCam.leftCamera      = pending_left_cam_;
           stereoCam.rightCamera     = pending_right_cam_;
           stereoCam.rightCameraPose = mrpt::poses::CPose3DQuat(*right_camera_pose_).asTPose();
+          if (!rectify_output_size_str_.empty())
+          {
+            unsigned int       w = 0;
+            unsigned int       h = 0;
+            std::istringstream ss(rectify_output_size_str_);
+            ASSERTMSG_(
+                (ss >> w) && (ss >> h) && w > 0 && h > 0,
+                "rectify_output_size must be \"width height\", both positive.");
+            rectify_map_.enableResizeOutput(true, w, h);
+          }
           rectify_map_.setFromCamParams(stereoCam);
           // The rectified frame is rotated with respect to the physical left
           // camera; remember that rotation so the reported trajectory can be
           // expressed in the camera's own (and hence the robot's) frame.
           left_cam_in_rectified_ = mrpt::poses::CPose3D(mrpt::poses::CPose3DQuat(
               0, 0, 0, mrpt::math::CQuaternionDouble(rectify_map_.getLeftCameraRot())));
+
+          const auto&  rc   = rectify_map_.getRectifiedLeftImageParams();
+          const double hfov = 2 * std::atan(0.5 * rc.ncols / rc.fx());
+          const double vfov = 2 * std::atan(0.5 * rc.nrows / rc.fy());
+          MRPT_LOG_INFO_STREAM(
+              "VisualSlam: rectified to "
+              << rc.ncols << "x" << rc.nrows << " pinhole, fx=" << rc.fx()
+              << ", FOV=" << mrpt::RAD2DEG(hfov) << "x" << mrpt::RAD2DEG(vfov) << " deg"
+              << " (input " << pending_left_cam_.ncols << "x" << pending_left_cam_.nrows << ")");
         }
         mrpt::img::CImage rectLeft;
         mrpt::img::CImage rectRight;
@@ -339,6 +398,161 @@ void VisualSlam::rememberCameraPoseOnRobot(const mrpt::poses::CPose3D& p)
   MRPT_LOG_INFO_STREAM(
       "VisualSlam: camera-on-robot extrinsic taken from the observations ("
       << p << "); poses will be reported in the body frame.");
+}
+
+void VisualSlam::handleImuObservation(const mrpt::obs::CObservationIMU& o)
+{
+  using mrpt::obs::IMU_WX;
+  using mrpt::obs::IMU_WY;
+  using mrpt::obs::IMU_WZ;
+  if (!o.has(IMU_WX) || !o.has(IMU_WY) || !o.has(IMU_WZ))
+  {
+    return;  // an accelerometer-only stream carries nothing this can use
+  }
+  if (!imu_pose_on_robot_ && imu_pose_on_robot_str_.empty())
+  {
+    imu_pose_on_robot_ = o.sensorPose;
+  }
+
+  GyroSample s;
+  s.t = mrpt::Clock::toDouble(o.timestamp);
+  s.w = {o.get(IMU_WX), o.get(IMU_WY), o.get(IMU_WZ)};
+  // Out-of-order samples would corrupt the trapezoidal integration below, and a
+  // stream that is not monotonic in time is not usable for this anyway.
+  if (!gyro_.empty() && s.t <= gyro_.back().t)
+  {
+    return;
+  }
+  gyro_.push_back(s);
+
+  // Keep only what a future frame interval could still need.
+  const double keepFrom = s.t - 2.0 * imu_max_gap_;
+  while (gyro_.size() > 2 && gyro_.front().t < keepFrom)
+  {
+    gyro_.pop_front();
+  }
+}
+
+void VisualSlam::rejectInconsistentTracks(
+    const mrpt::img::CImage& prev, const mrpt::img::CImage& curr,
+    const std::vector<mrpt::math::TPoint2Df>& next_pts,
+    std::vector<mola::vision::TrackStatus>&   status) const
+{
+  if (lk_fb_max_error_px_ <= 0.f || next_pts.empty())
+  {
+    return;
+  }
+  // The backward pass deliberately starts from "the point did not move":
+  // seeding it with the forward answer's origin would ask whether a fixed point
+  // is a fixed point, which it always is.
+  mola::vision::LKParams lk;
+  lk.win_size          = lk_win_size_;
+  lk.max_levels        = lk_max_levels_;
+  lk.use_initial_guess = false;
+
+  std::vector<mrpt::math::TPoint2Df>     back_pts;
+  std::vector<mola::vision::TrackStatus> back_status;
+  mola::vision::calcOpticalFlowPyrLK(curr, prev, next_pts, back_pts, back_status, lk);
+
+  const float max_err2 = lk_fb_max_error_px_ * lk_fb_max_error_px_;
+  for (size_t i = 0; i < next_pts.size(); ++i)
+  {
+    if (status[i] == mola::vision::TrackStatus::LOST)
+    {
+      continue;
+    }
+    if (back_status[i] == mola::vision::TrackStatus::LOST)
+    {
+      status[i] = mola::vision::TrackStatus::LOST;
+      continue;
+    }
+    const float dx = back_pts[i].x - track_pts_[i].x;
+    const float dy = back_pts[i].y - track_pts_[i].y;
+    if (dx * dx + dy * dy > max_err2)
+    {
+      status[i] = mola::vision::TrackStatus::LOST;
+    }
+  }
+}
+
+void VisualSlam::updateGyroDeltaRotation(double t0, double t1)
+{
+  gyro_delta_rot_.reset();
+  if (imu_label_.empty() || gyro_.size() < 2 || t1 <= t0 || (t1 - t0) > imu_max_gap_)
+  {
+    return;
+  }
+
+  // The rotation is measured in the IMU frame, so it only becomes usable once
+  // the IMU-to-camera rotation is known. Both extrinsics are reported relative
+  // to the vehicle body, which is what chains them together.
+  if (!rot_internal_imu_)
+  {
+    if (!imu_pose_on_robot_ || !camera_pose_on_robot_)
+    {
+      if (!warned_no_imu_extrinsics_)
+      {
+        warned_no_imu_extrinsics_ = true;
+        MRPT_LOG_WARN(
+            "VisualSlam: gyro aiding is configured but the camera-on-robot or IMU-on-robot "
+            "extrinsic is unknown, so the gyro cannot be rotated into the camera frame. "
+            "Falling back to the constant-velocity rotation prediction.");
+      }
+      return;
+    }
+    // T_internal_imu = T_rect_cam * T_cam_body * T_body_imu. Without
+    // rectification the internal frame IS the left camera, so the first factor
+    // drops out.
+    const mrpt::poses::CPose3D rectFromCam =
+        left_cam_in_rectified_ ? *left_cam_in_rectified_ : mrpt::poses::CPose3D::Identity();
+    const mrpt::poses::CPose3D T = rectFromCam + (-*camera_pose_on_robot_) + *imu_pose_on_robot_;
+    rot_internal_imu_            = T.getRotationMatrix();
+  }
+
+  // Trapezoidal integration of the angular velocity over (t0, t1], composed on
+  // the manifold. At any sane IMU rate the per-step angle is small enough that
+  // a first-order exponential map is exact to well below the gyro's own noise.
+  mrpt::math::CMatrixDouble33 dR      = mrpt::math::CMatrixDouble33::Identity();
+  bool                        any     = false;
+  double                      covered = 0;
+  for (size_t i = 0; i + 1 < gyro_.size(); ++i)
+  {
+    const double ta = gyro_[i].t;
+    const double tb = gyro_[i + 1].t;
+    if (tb <= t0 || ta >= t1)
+    {
+      continue;
+    }
+    const double a  = std::max(ta, t0);
+    const double b  = std::min(tb, t1);
+    const double dt = b - a;
+    if (dt <= 0)
+    {
+      continue;
+    }
+    // Linear interpolation of the two bracketing samples at the sub-interval
+    // midpoint: the frame boundaries almost never fall on a sample.
+    const double          span = tb - ta;
+    const double          u    = (span > 1e-9) ? ((0.5 * (a + b) - ta) / span) : 0.0;
+    const auto&           wa   = gyro_[i].w;
+    const auto&           wb   = gyro_[i + 1].w;
+    const Eigen::Vector3d w(
+        wa.x + u * (wb.x - wa.x), wa.y + u * (wb.y - wa.y), wa.z + u * (wb.z - wa.z));
+    dR = (dR.asEigen() * expSO3(w * dt)).eval();
+    covered += dt;
+    any = true;
+  }
+  // A partially covered interval would silently under-rotate the prediction,
+  // which is worse than not using the gyro at all.
+  if (!any || covered < 0.9 * (t1 - t0))
+  {
+    return;
+  }
+
+  gyro_delta_rot_ = mrpt::math::CMatrixDouble33(
+      (rot_internal_imu_->asEigen() * dR.asEigen() * rot_internal_imu_->asEigen().transpose())
+          .eval());
+  ++num_gyro_predictions_;
 }
 
 void VisualSlam::fuseIntoStateEstimator(const mrpt::Clock::time_point& timestamp, bool localized)
@@ -439,6 +653,17 @@ mrpt::poses::CPose3D VisualSlam::processFrame(
   const mrpt::img::CImage gray = gray_in.grayscale();
   profiler_.leave("grayscale");
   ++frame_count_;
+
+  const double frame_ts = mrpt::Clock::toDouble(timestamp);
+  if (last_frame_ts_)
+  {
+    updateGyroDeltaRotation(*last_frame_ts_, frame_ts);
+  }
+  else
+  {
+    gyro_delta_rot_.reset();
+  }
+  last_frame_ts_ = frame_ts;
 
   if (prev_gray_.isEmpty())
   {
@@ -670,7 +895,23 @@ mrpt::poses::CPose3D VisualSlam::predictedPoseWc() const
   // Constant-velocity prediction: the previous frame-to-frame motion is a far
   // better starting point than "the camera did not move", both for LK and for
   // PnP, and it is the only sane fallback when localization fails outright.
-  return have_motion_ ? (pose_wc_ + last_motion_) : pose_wc_;
+  if (!gyro_delta_rot_)
+  {
+    return have_motion_ ? (pose_wc_ + last_motion_) : pose_wc_;
+  }
+  // With a gyro, the rotation is measured rather than extrapolated. That is the
+  // half of the increment a constant-velocity model gets badly wrong under
+  // angular acceleration, and the half the LK seed is most sensitive to (a
+  // rotation moves every pixel in the image, a small translation barely moves
+  // the distant ones).
+  const auto translation =
+      have_motion_ ? last_motion_.translation() : mrpt::math::TPoint3D(0, 0, 0);
+  mrpt::math::CVectorFixedDouble<3> t;
+  t[0] = translation.x;
+  t[1] = translation.y;
+  t[2] = translation.z;
+  const mrpt::poses::CPose3D inc(*gyro_delta_rot_, t);
+  return pose_wc_ + inc;
 }
 
 bool VisualSlam::solveFramePose(
@@ -847,6 +1088,10 @@ void VisualSlam::trackAndLocalize(const mrpt::img::CImage& gray)
   profiler_.enter("track.LK");
   mola::vision::calcOpticalFlowPyrLK(prev_gray_, gray, track_pts_, next_pts, status, lk);
   profiler_.leave("track.LK");
+  {
+    mrpt::system::CTimeLoggerEntry tfb(profiler_, "track.LKforwardBackward");
+    rejectInconsistentTracks(prev_gray_, gray, next_pts, status);
+  }
 
   // 3D-2D correspondences for PnP.
   std::vector<TPoint3Df> worldPts;
@@ -932,7 +1177,7 @@ int VisualSlam::addStereoLandmarks(
 
   mola::vision::RGBDParams dp;
   dp.min_depth = 0.3f;
-  dp.max_depth = 100.0f;
+  dp.max_depth = max_landmark_depth_;
 
   int added = 0;
   for (size_t i = 0; i < left_feats.size(); ++i)
@@ -978,6 +1223,21 @@ mrpt::poses::CPose3D VisualSlam::processStereoFrame(
   const mrpt::img::CImage grayL = left.grayscale();
   const mrpt::img::CImage grayR = right.grayscale();
   ++frame_count_;
+
+  // Measured inter-frame rotation, if a gyro stream is configured and covers
+  // this interval. Everything downstream that predicts the pose picks it up
+  // through predictedPoseWc(): the LK seed, the PnP seed, and the dead-reckoned
+  // fallback when PnP fails.
+  const double frame_ts = mrpt::Clock::toDouble(timestamp);
+  if (last_frame_ts_)
+  {
+    updateGyroDeltaRotation(*last_frame_ts_, frame_ts);
+  }
+  else
+  {
+    gyro_delta_rot_.reset();
+  }
+  last_frame_ts_ = frame_ts;
 
   mola::vision::GridDistributorParams gp;
   gp.max_corners  = max_features_;
@@ -1031,6 +1291,10 @@ mrpt::poses::CPose3D VisualSlam::processStereoFrame(
   profiler_.enter("track.LK");
   mola::vision::calcOpticalFlowPyrLK(prev_gray_, grayL, track_pts_, next_pts, status, lk);
   profiler_.leave("track.LK");
+  {
+    mrpt::system::CTimeLoggerEntry tfb(profiler_, "track.LKforwardBackward");
+    rejectInconsistentTracks(prev_gray_, grayL, next_pts, status);
+  }
 
   std::vector<TPoint3Df> worldPts;
   std::vector<TPoint2Df> pixels;
