@@ -69,6 +69,24 @@ struct GridDistributorParams
   float min_distance  = 10.0f;
   float quality_level = 0.01f;
   int   block_size    = 3;
+
+  /** Focal length, in pixels, of the image being fed to the detector. Leave at
+   *  0 to keep the plain pixel-domain behavior.
+   *
+   *  When set, feature spacing becomes uniform in ANGLE rather than in pixels:
+   *  `min_distance` is read as the spacing at the principal point and grown
+   *  outwards by (1 + (r/f)^2), and each cell's share of `max_corners` follows
+   *  its solid angle instead of its pixel area. The two differ sharply on a
+   *  wide rectified field, where a pinhole target packs progressively less
+   *  angle into each pixel: at 57 deg off-axis a pixel spans a third of the
+   *  angle it does at the center, so a pixel-denominated rule concentrates
+   *  features exactly where the image carries the least independent
+   *  information. */
+  float focal_length_px = 0.0f;
+
+  /// Principal point; negative means "use the image center".
+  float principal_x = -1.0f;
+  float principal_y = -1.0f;
 };
 
 class GridFeatureDistributor
