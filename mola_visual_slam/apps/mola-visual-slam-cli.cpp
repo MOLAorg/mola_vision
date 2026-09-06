@@ -80,6 +80,7 @@ struct Cli
   Opt<std::string>              arg_rightSensorPose;
   Opt<std::string>              arg_imuTopic;
   Opt<std::string>              arg_imuSensorPose;
+  Opt<double>                   arg_imageTimeOffset;
 #endif
   Opt<std::string> arg_imuLabel;
 
@@ -194,6 +195,12 @@ struct Cli
         "Overrides whatever /tf says about the IMU pose on the vehicle: "
         "'x y z yaw_deg pitch_deg roll_deg'. Must be in the same body frame as "
         "--left-sensor-pose, since the two chain into the IMU-to-camera rotation.");
+
+    arg_imageTimeOffset.value = 0;
+    arg_imageTimeOffset.opt   = cmd.add_option(
+        "--image-time-offset", arg_imageTimeOffset.value,
+        "Seconds added to both image topics' timestamps, for a camera whose clock is "
+        "consistently early or late with respect to the rest of the rig.");
 #endif
 
 #if defined(HAVE_MOLA_INPUT_KITTI)
@@ -243,9 +250,16 @@ std::shared_ptr<mola::OfflineDatasetSource> dataset_from_rosbag1(
   auto o = std::make_shared<mola::Rosbag1Dataset>();
   o->setMinLoggingLevel(logLevel);
 
+  std::string imageTimeOffsetYaml;
+  if (cli.arg_imageTimeOffset.isSet())
+  {
+    imageTimeOffsetYaml =
+        "\n          time_offset: " + std::to_string(cli.arg_imageTimeOffset.getValue());
+  }
+
   std::string sensorsYaml = "\n        - topic: '" + cli.arg_leftTopic.getValue() +
                             "'\n          type: CObservationImage\n          sensorLabel: '" +
-                            cli.arg_leftLabel.getValue() + "'";
+                            cli.arg_leftLabel.getValue() + "'" + imageTimeOffsetYaml;
   if (cli.arg_leftSensorPose.isSet())
   {
     sensorsYaml += "\n          fixed_sensor_pose: \"" + cli.arg_leftSensorPose.getValue() +
@@ -255,7 +269,7 @@ std::shared_ptr<mola::OfflineDatasetSource> dataset_from_rosbag1(
   {
     sensorsYaml += "\n        - topic: '" + cli.arg_rightTopic.getValue() +
                    "'\n          type: CObservationImage\n          sensorLabel: '" +
-                   cli.arg_rightLabel.getValue() + "'";
+                   cli.arg_rightLabel.getValue() + "'" + imageTimeOffsetYaml;
     if (cli.arg_rightSensorPose.isSet())
     {
       sensorsYaml += "\n          fixed_sensor_pose: \"" + cli.arg_rightSensorPose.getValue() +
