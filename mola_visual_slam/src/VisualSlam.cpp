@@ -783,12 +783,26 @@ size_t VisualSlam::numActiveLandmarks() const
   }
   return n;
 }
+namespace
+{
+/** Spacing and per-cell quotas are pixel-denominated by default, which
+ *  over-represents the periphery of a wide rectified field: a pinhole plane
+ *  packs progressively less angle into each pixel as the radius grows. Handing
+ *  the detector the focal length switches both to a uniform-in-ANGLE rule. */
+void setAngularSpacing(mola::vision::GridDistributorParams& gp, const mrpt::img::TCamera& cam)
+{
+  gp.focal_length_px = static_cast<float>(cam.fx());
+  gp.principal_x     = static_cast<float>(cam.cx());
+  gp.principal_y     = static_cast<float>(cam.cy());
+}
+}  // namespace
 
 void VisualSlam::detectInitialFeatures(const mrpt::img::CImage& gray)
 {
   mola::vision::GridDistributorParams gp;
   gp.max_corners  = max_features_;
   gp.min_distance = min_distance_;
+  setAngularSpacing(gp, camera_);
   mola::vision::GridFeatureDistributor dist(gp);
   init_ref_pts_ = dist.detect(gray, {});
   track_pts_    = init_ref_pts_;
@@ -1211,8 +1225,9 @@ void VisualSlam::restartMapHere(
   last_motion_ = mrpt::poses::CPose3D::Identity();
 
   mola::vision::GridDistributorParams gp;
-  gp.max_corners   = max_features_;
-  gp.min_distance  = min_distance_;
+  gp.max_corners  = max_features_;
+  gp.min_distance = min_distance_;
+  setAngularSpacing(gp, camera_);
   const auto feats = mola::vision::GridFeatureDistributor(gp).detect(grayL, {});
   {
     mrpt::system::CTimeLoggerEntry tle(profiler_, "stereo.match");
@@ -1307,6 +1322,7 @@ void VisualSlam::trackAndLocalize(const mrpt::img::CImage& gray)
     mola::vision::GridDistributorParams gp;
     gp.max_corners  = max_features_;
     gp.min_distance = min_distance_;
+    setAngularSpacing(gp, camera_);
     mola::vision::GridFeatureDistributor dist(gp);
     const auto                           fresh = dist.detect(gray, track_pts_);
     for (const auto& p : fresh)
@@ -1404,6 +1420,7 @@ mrpt::poses::CPose3D VisualSlam::processStereoFrame(
   mola::vision::GridDistributorParams gp;
   gp.max_corners  = max_features_;
   gp.min_distance = min_distance_;
+  setAngularSpacing(gp, camera_);
   mola::vision::GridFeatureDistributor dist(gp);
 
   // -------- First frame: initialize a metric map directly from stereo --------
