@@ -87,15 +87,29 @@ modules:
       # attitude error. Any gyro suffices over a 0.1 s prediction; the stim320
       # is the most accurate one in this dataset (set MOLA_IMU_TOPIC to it).
       imu_label: "imu"
-      max_features: 500
-      min_distance: 12.0
-      redetect_below: 200
+      # On the trimmed canvas above, more features buy position accuracy at no
+      # cost in attitude (heap-1, 250 / 500 / 800 features: 0.360 / 0.252 /
+      # 0.245 m, per-increment rotation flat at 0.039 / 0.037 / 0.037 deg), and
+      # on a texture-starved mission they decide whether tracking survives at
+      # all (arc-3's first 100 s: 9.8 / 4.4 / 3.1 m). Past about 800 the
+      # detector returns weaker corners and it reverses.
+      max_features: ${MOLA_VO_MAX_FEATURES|800}
+      min_distance: 9.0
+      redetect_below: 350
       lk_win_size: 21
       lk_max_levels: 3
       # Observations leaving the BA window are dropped without a marginalization
       # prior, so a longer window keeps more of what pins the recent poses.
       ba_window_size: 20
       min_pnp_points: 12
+      # Coast through a bad patch instead of resetting on it: wiping the local
+      # map discards good structure and freezes the pose while the robot keeps
+      # moving, and with the gyro supplying rotation, dead reckoning for up to
+      # 1.5 s is the lesser evil. Inert on a well-lit mission (heap-1 never
+      # restarts); on arc-3's first 100 s the pair takes restarts from 41 to 6
+      # and error from 3.10 m to 2.05 m. Measured together, not separately.
+      lost_max_frames: 15
+      min_pnp_inlier_ratio: 0.25
       kf_max_frames_gap: 10
       kf_min_frames_gap: 2
       kf_min_tracked: 120

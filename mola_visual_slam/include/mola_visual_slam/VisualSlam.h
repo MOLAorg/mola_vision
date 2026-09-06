@@ -174,7 +174,17 @@ class VisualSlam : public mola::FrontEndBase,
    *  rectified frame can align two images whose rows run in opposite
    *  directions, so every stereo match fails. Rotating the affected stream back
    *  restores agreement with the calibration, which is why the intrinsics need
-   *  no adjustment here. */
+   *  no adjustment here.
+   *
+   *  That last step assumes the calibration describes the UPRIGHT image and the
+   *  stream was shipped rotated, which is the case these flags exist for
+   *  (GrandTour arc-3). A physically inverted camera whose calibration
+   *  describes the as-shipped image would be the other way round and would need
+   *  its principal point reflected too, since the image rotation is about the
+   *  image center and the intrinsics are about the principal point (40 px apart
+   *  on this rig). Rotating the intrinsics here regardless is NOT harmless:
+   *  measured on arc-3 it took the local-map restarts over the first 970 frames
+   *  from 183 to 927. */
   bool left_image_rotate_180_  = false;
   bool right_image_rotate_180_ = false;
   /** Size of the rectified images ("width height"), when \c right_camera_pose
