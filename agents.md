@@ -22,9 +22,17 @@ Packages:
   rectification targets a PINHOLE model at the source focal length and keeps the
   same angular resolution, so the canvas decides how much of a fisheye frustum
   survives. Measured on heap-1, whole-mission error falls monotonically as the
-  canvas SHRINKS (1920x1440 / 1440x1080 / 1000x760 give 1.26 / 0.45 / 0.25 m),
-  so the rectified periphery costs more in camera-model and warp error than its
-  wide baseline is worth; about 1000x760 (~70 deg horizontal) is the knee.
+  canvas SHRINKS (1920x1440 / 1440x1080 / 1000x760 give 1.26 / 0.45 / 0.25 m);
+  about 1000x760 (~70 deg horizontal) is the knee. The reason is NOT camera-model
+  error in the periphery: the epipolar residual is flat in pixels and, converted
+  to angle, is three times BETTER at the edge than at the center. It is that a
+  pinhole target magnifies an equidistant source by 1/cos^2(theta) (3.5x at 57
+  deg), so peripheral pixels are interpolated rather than informative, while
+  `min_distance` is expressed in PIXELS and therefore packs features ~3.4x more
+  densely in angle out there, spending a fixed `max_features` budget on the
+  worst-sampled part of the image. Selecting features by angular spacing would
+  address the cause instead of the symptom, and would allow keeping the wide
+  field.
   `clahe_clip_limit` applies contrast-limited adaptive histogram equalization
   before detection and tracking, for scenes whose usable texture spans only a
   few grey levels: detection thresholds are relative to each grid cell, but the

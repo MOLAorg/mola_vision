@@ -187,6 +187,54 @@ std::vector<mrpt::math::TPoint2Df> GridFeatureDistributor::detect(
   const int max_per_cell =
       std::max(1, params_.max_corners / (params_.grid_rows * params_.grid_cols));
 
+  // Uniform-in-angle mode: a pinhole image plane packs less angle into each
+  // pixel as the radius grows, by exactly 1/(1+(r/f)^2) per axis, so a spacing
+  // and a per-cell quota expressed in pixels both over-represent the
+  // periphery. Both are rescaled by that factor when a focal length is given.
+  const bool  angularSpacing = params_.focal_length_px > 0.f;
+  const float f2             = params_.focal_length_px * params_.focal_length_px;
+  const float ppx            = params_.principal_x >= 0.f ? params_.principal_x : 0.5f * cols;
+  const float ppy            = params_.principal_y >= 0.f ? params_.principal_y : 0.5f * rows;
+
+  /// Squared pixel spacing required at a point, to hold the angular spacing
+  /// constant across the field.
+  const auto minDist2At = [&](float x, float y) -> float
+  {
+    if (!angularSpacing)
+    {
+      return params_.min_distance * params_.min_distance;
+    }
+    const float dx    = x - ppx;
+    const float dy    = y - ppy;
+    const float scale = 1.f + (dx * dx + dy * dy) / f2;
+    const float d     = params_.min_distance * scale;
+    return d * d;
+  };
+
+  // Per-cell quotas follow solid angle rather than pixel area. The solid angle
+  // of a patch at radius r is proportional to f*A/(f^2+r^2)^(3/2).
+  std::vector<float> cellWeight(static_cast<size_t>(params_.grid_rows) * params_.grid_cols, 1.f);
+  if (angularSpacing)
+  {
+    float wSum = 0.f;
+    for (int gr = 0; gr < params_.grid_rows; ++gr)
+    {
+      for (int gc = 0; gc < params_.grid_cols; ++gc)
+      {
+        const float x  = (static_cast<float>(gc) + 0.5f) * cell_w - ppx;
+        const float y  = (static_cast<float>(gr) + 0.5f) * cell_h - ppy;
+        const float r2 = x * x + y * y;
+        const float w  = 1.f / std::pow(1.f + r2 / f2, 1.5f);
+        cellWeight[static_cast<size_t>(gr) * params_.grid_cols + gc] = w;
+        wSum += w;
+      }
+    }
+    for (auto& w : cellWeight)
+    {
+      w = w * static_cast<float>(params_.grid_rows * params_.grid_cols) / wSum;
+    }
+  }
+
   GoodFeaturesParams cell_params;
   cell_params.max_corners   = max_per_cell;
   cell_params.min_distance  = params_.min_distance;
@@ -208,6 +256,18 @@ std::vector<mrpt::math::TPoint2Df> GridFeatureDistributor::detect(
       const int y1 = std::min(rows, y0 + cell_h);
       const int x1 = std::min(cols, x0 + cell_w);
 
+      if (angularSpacing)
+      {
+        const size_t ci = static_cast<size_t>(gr) * params_.grid_cols + gc;
+        cell_params.max_corners =
+            std::max(1, static_cast<int>(std::lround(max_per_cell * cellWeight[ci])));
+        // Within one cell the radius barely changes, so a single scaled
+        // spacing at the cell center is enough for its internal suppression.
+        const float xc           = (static_cast<float>(gc) + 0.5f) * cell_w;
+        const float yc           = (static_cast<float>(gr) + 0.5f) * cell_h;
+        cell_params.min_distance = std::sqrt(minDist2At(xc, yc));
+      }
+
       // Extract cell as a patch
       mrpt::img::CImage patch;
       img.extract_patch(
@@ -226,10 +286,12 @@ std::vector<mrpt::math::TPoint2Df> GridFeatureDistributor::detect(
         bool too_close = false;
 
         // Check against already-tracked existing features
+        const float ptMinDist2 = minDist2At(pt.x, pt.y);
+
         for (const auto& ex : existing)
         {
           const float dx = pt.x - ex.x, dy = pt.y - ex.y;
-          if (dx * dx + dy * dy < min_dist2)
+          if (dx * dx + dy * dy < ptMinDist2)
           {
             too_close = true;
             break;
@@ -241,7 +303,7 @@ std::vector<mrpt::math::TPoint2Df> GridFeatureDistributor::detect(
         for (const auto& acc : result)
         {
           const float dx = pt.x - acc.x, dy = pt.y - acc.y;
-          if (dx * dx + dy * dy < min_dist2)
+          if (dx * dx + dy * dy < ptMinDist2)
           {
             too_close = true;
             break;
