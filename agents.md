@@ -30,9 +30,14 @@ Packages:
   deg), so peripheral pixels are interpolated rather than informative, while
   `min_distance` is expressed in PIXELS and therefore packs features ~3.4x more
   densely in angle out there, spending a fixed `max_features` budget on the
-  worst-sampled part of the image. Selecting features by angular spacing would
-  address the cause instead of the symptom, and would allow keeping the wide
-  field.
+  worst-sampled part of the image. Feature selection therefore spaces features
+  by ANGLE, not by pixels: `GridDistributorParams::focal_length_px` (set by
+  `VisualSlam` from the camera) scales `min_distance` and the per-cell budget by
+  the local magnification, so the angular density is uniform across the frame.
+  That recovers most, but not all, of the wide canvas's deficit (1920x1440 goes
+  from 0.99 to 0.30 m), and it also improves the trimmed canvas (0.24 to 0.20 m),
+  so the trim is still worth keeping; what remains is interpolation quality, not
+  feature placement.
   `clahe_clip_limit` applies contrast-limited adaptive histogram equalization
   before detection and tracking, for scenes whose usable texture spans only a
   few grey levels: detection thresholds are relative to each grid cell, but the
