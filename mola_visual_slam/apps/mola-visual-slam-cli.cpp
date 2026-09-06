@@ -480,6 +480,23 @@ int main_visual_slam(Cli& cli)
   std::cout << "\nFrames with a gyro-measured rotation prediction: " << vslam->numGyroPredictions()
             << "\n";
 
+  if (const auto resid = vslam->stereoResidualByRadius(); !resid.empty())
+  {
+    std::cout << "Stereo epipolar residual |dy| by image radius (rectification check):\n";
+    for (size_t i = 0; i < resid.size(); ++i)
+    {
+      if (resid[i].second == 0)
+      {
+        continue;
+      }
+      std::cout << mrpt::format(
+          "   r=%4zu-%4zu px : %.4f px  (n=%zu)\n",
+          i * static_cast<size_t>(mola::VisualSlam::kStereoResidualBinPx),
+          (i + 1) * static_cast<size_t>(mola::VisualSlam::kStereoResidualBinPx), resid[i].first,
+          resid[i].second);
+    }
+  }
+
   if (cli.arg_outPath.isSet())
   {
     const auto fil = cli.arg_outPath.getValue();

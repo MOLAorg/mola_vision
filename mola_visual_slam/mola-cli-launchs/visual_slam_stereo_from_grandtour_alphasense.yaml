@@ -99,6 +99,16 @@ modules:
       # then derived automatically from the rectified geometry, not needed
       # here.
       right_camera_pose: "0.110078 -0.000468 -0.001201 -1.1752 0.1992 0.0244"
+      # Rectify onto a SMALLER canvas than the source. The angular resolution is
+      # unchanged, so this simply narrows the rectified field of view: 91.5 x
+      # 75.2 deg at the full 1440x1080, 71.2 x 55.8 deg here. These are fisheye
+      # lenses, and the rectified periphery is measurably less self-consistent
+      # than the center - on this mission the stereo epipolar residual grows
+      # from 0.59 px near the optical axis to 0.85 px at r=750 px, where a
+      # correct rectification would be flat. Dropping that periphery roughly
+      # halves the whole-mission error (0.45 -> 0.25 m, 1.37 -> 1.12 deg on
+      # heap-1); widening it instead makes things markedly worse.
+      rectify_output_size: "1000 760"
       # Some missions ship one of the two streams 180 deg rotated while their
       # camera_info still describes the upright image (confirmed on arc-3's
       # front_left, whose camera_info is byte-identical to heap-1's). No

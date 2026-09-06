@@ -17,10 +17,22 @@ Packages:
   constant-velocity model, windowed BA with a stereo-disparity residual that
   anchors metric scale. Optional `right_camera_pose` rectifies a raw
   (non-pre-rectified) rig; `right_camera_pose.x` must be POSITIVE, i.e. the
-  right camera in the LEFT camera's frame. `rectify_output_size` ("W H")
-  enlarges the rectified canvas: rectification targets a PINHOLE model at the
-  source focal length, so a fisheye lens loses everything outside the frustum
-  the canvas spans, and the periphery is what constrains rotation best.
+  right camera in the LEFT camera's frame. `rectify_output_size` ("W H") resizes
+  the rectified canvas, which is how the rectified FIELD OF VIEW is chosen:
+  rectification targets a PINHOLE model at the source focal length and keeps the
+  same angular resolution, so the canvas decides how much of a fisheye frustum
+  survives. Measured on heap-1, whole-mission error falls monotonically as the
+  canvas SHRINKS (1920x1440 / 1440x1080 / 1000x760 give 1.26 / 0.45 / 0.25 m),
+  so the rectified periphery costs more in camera-model and warp error than its
+  wide baseline is worth; about 1000x760 (~70 deg horizontal) is the knee.
+  `clahe_clip_limit` applies contrast-limited adaptive histogram equalization
+  before detection and tracking, for scenes whose usable texture spans only a
+  few grey levels: detection thresholds are relative to each grid cell, but the
+  LK gradient-energy gate is absolute. The per-axis `fuse_sigma_*` parameters
+  refine the isotropic fused covariance (each falls back to it when 0). The CLI
+  prints the stereo epipolar residual binned by image radius, which checks
+  rectification quality without any ground truth: on a correct rectification it
+  is flat.
   `imu_label` turns on gyro-aided prediction: the inter-frame rotation comes
   from a `CObservationIMU` stream instead of the constant-velocity model
   (translation still constant-velocity), which is what keeps tracking alive

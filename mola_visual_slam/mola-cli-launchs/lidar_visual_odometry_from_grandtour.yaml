@@ -68,6 +68,14 @@ modules:
       # (alphasense_base -> front_left|front_right), x POSITIVE because the
       # right camera sits to the right of the left one.
       right_camera_pose: "${MOLA_VO_RIGHT_CAM_POSE|0.110078 -0.000468 -0.001201 -1.1752 0.1992 0.0244}"
+      # Rectify onto a smaller canvas, which narrows the rectified field of view
+      # at unchanged angular resolution (91.5 x 75.2 deg at the full 1440x1080,
+      # 71.2 x 55.8 deg here). The rectified periphery of these fisheye lenses is
+      # measurably less self-consistent than the center - the stereo epipolar
+      # residual grows from 0.59 px on axis to 0.85 px at r=750 px, where a
+      # correct rectification would be flat - and dropping it roughly halves the
+      # whole-mission error on heap-1.
+      rectify_output_size: "${MOLA_VO_RECTIFY_SIZE|1000 760}"
       # Some missions ship one stream 180 deg rotated while their camera_info
       # still describes the upright image (arc-3's front_left does).
       left_image_rotate_180: ${MOLA_VO_LEFT_ROTATE_180|false}
@@ -96,6 +104,18 @@ modules:
       state_estimator_frame_id: "${MOLA_VO_FRAME_ID|visual_odom}"
       fuse_sigma_xyz: ${MOLA_VO_SIGMA_XYZ|0.10}
       fuse_sigma_angles_deg: ${MOLA_VO_SIGMA_ANG_DEG|0.5}
+      # A forward-facing stereo pair is not equally good in every direction, and
+      # these per-axis sigmas override the two isotropic ones above when set (0
+      # keeps the isotropic value, which is the default). Measured on heap-1,
+      # per 0.1 s increment in the BODY frame: roll 0.019 deg, pitch 0.020 deg,
+      # yaw 0.029 deg; lateral 1.0 mm, vertical 0.8 mm, forward 2.4 mm. Both
+      # isotropic defaults above are far looser than that, so they are the place
+      # to start when fusing vision buys less than it should.
+      fuse_sigma_yaw_deg: ${MOLA_VO_SIGMA_YAW_DEG|0}
+      fuse_sigma_pitchroll_deg: ${MOLA_VO_SIGMA_PITCHROLL_DEG|0}
+      fuse_sigma_forward: ${MOLA_VO_SIGMA_FWD|0}
+      fuse_sigma_lateral: ${MOLA_VO_SIGMA_LAT|0}
+      fuse_sigma_vertical: ${MOLA_VO_SIGMA_UP|0}
       fuse_decimation: ${MOLA_VO_FUSE_DECIMATION|1}
       publish_viz_2d: ${MOLA_WITH_GUI|true}
       publish_viz_3d: false
