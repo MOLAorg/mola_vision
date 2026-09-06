@@ -124,6 +124,14 @@ class VisualSlam : public mola::FrontEndBase,
    *  from the constant-velocity model. */
   [[nodiscard]] size_t numGyroPredictions() const { return num_gyro_predictions_; }
 
+  /** Mean |y_left - y_right| of the accepted stereo matches, binned by distance
+   *  from the image center (bin width \c kStereoResidualBinPx pixels). After a
+   *  correct rectification the two rows agree, so any growth with radius is
+   *  rectification or camera-model error rather than matching noise. Empty bins
+   *  come back as (0, 0). */
+  static constexpr int                                 kStereoResidualBinPx = 100;
+  [[nodiscard]] std::vector<std::pair<double, size_t>> stereoResidualByRadius() const;
+
   bool   isInitialized() const { return state_ == State::TRACKING; }
   size_t numLandmarks() const { return landmarks_.size(); }
   size_t numActiveLandmarks() const;
@@ -198,6 +206,24 @@ class VisualSlam : public mola::FrontEndBase,
    *  for this source's frame transform separately. */
   double fuse_sigma_xyz_        = 0.05;  //!< [m]
   double fuse_sigma_angles_deg_ = 0.5;  //!< [deg]
+  /** Per-axis refinements of the two isotropic sigmas above. Each falls back to
+   *  its isotropic counterpart when <= 0 (the default), so the fused covariance
+   *  is unchanged unless one of these is set.
+   *
+   *  A forward-facing stereo pair is not equally good in every direction, and an
+   *  isotropic covariance throws that structure away: the two tilt axes are read
+   *  almost directly off pixel displacements, while yaw trades off against
+   *  lateral translation; likewise the two image-plane translation axes are far
+   *  better determined than range along the optical axis. Measured on GrandTour
+   *  heap-1, per 0.1 s increment: roll 0.019 deg, pitch 0.020 deg, yaw 0.029
+   *  deg; lateral 1.0 mm, vertical 0.8 mm, forward 2.4 mm. The axes are the
+   *  VEHICLE body's, so which one is "forward" follows the body frame rather
+   *  than the camera's mounting. */
+  double fuse_sigma_yaw_deg_       = 0;  //!< [deg], about body z
+  double fuse_sigma_pitchroll_deg_ = 0;  //!< [deg], about body y and x
+  double fuse_sigma_forward_       = 0;  //!< [m], body x
+  double fuse_sigma_lateral_       = 0;  //!< [m], body y
+  double fuse_sigma_vertical_      = 0;  //!< [m], body z
   /** Feed only one out of every N localized frames. Visual odometry typically
    *  runs far faster than a LiDAR, and one keyframe per scan period is plenty
    *  to constrain the estimator. */
@@ -239,11 +265,24 @@ class VisualSlam : public mola::FrontEndBase,
    *  position the measurement actually supports. A large value keeps every
    *  match (the previous behavior). */
   float max_landmark_depth_ = 100.0f;
-  int   max_features_       = 400;
-  float min_distance_       = 12.0f;
-  int   redetect_below_     = 150;
-  int   lk_win_size_        = 21;
-  int   lk_max_levels_      = 3;
+  /** Contrast-limited adaptive histogram equalization applied to every image
+   *  before detection and tracking. <= 0 (the default) disables it; 2 to 4 is
+   *  the useful range, and higher mostly amplifies noise.
+   *
+   *  Detection thresholds are relative to each grid cell, but the LK tracker
+   *  gates on ABSOLUTE gradient energy, so a scene whose usable texture spans
+   *  only a few grey levels loses its tracks however good its corners are. That
+   *  is the situation in an unlit space, and a global equalization cannot fix
+   *  it when part of the frame is saturated: the bright region then owns the
+   *  histogram and the dark one stays just as compressed. */
+  float clahe_clip_limit_ = 0.0f;
+  int   clahe_tiles_x_    = 8;
+  int   clahe_tiles_y_    = 8;
+  int   max_features_     = 400;
+  float min_distance_     = 12.0f;
+  int   redetect_below_   = 150;
+  int   lk_win_size_      = 21;
+  int   lk_max_levels_    = 3;
   /** Forward-backward consistency gate for LK tracking [px]. Each tracked
    *  feature is re-tracked from the current image back to the previous one, and
    *  dropped when the round trip does not return within this distance. A patch
@@ -363,6 +402,10 @@ class VisualSlam : public mola::FrontEndBase,
   size_t                                     num_gyro_predictions_     = 0;
   bool                                       warned_no_imu_extrinsics_ = false;
 
+  // ---- stereo epipolar residual, accumulated by image radius ----
+  std::vector<double> stereo_resid_sum_;
+  std::vector<size_t> stereo_resid_count_;
+
   // ---- fusion into a state-estimation module ----
   std::shared_ptr<mola::NavStateFilter> nav_state_filter_;
   size_t                                num_fused_poses_      = 0;
@@ -375,6 +418,9 @@ class VisualSlam : public mola::FrontEndBase,
   /** Latches the camera-on-robot extrinsic from an incoming observation, if it
    *  is not already known from the \c camera_pose_on_robot parameter. */
   void rememberCameraPoseOnRobot(const mrpt::poses::CPose3D& p);
+
+  /** Applies the configured contrast enhancement, or returns \p gray as-is. */
+  [[nodiscard]] mrpt::img::CImage enhance(const mrpt::img::CImage& gray) const;
 
   /** Buffers one IMU sample's angular velocity for the rotation prediction. */
   void handleImuObservation(const mrpt::obs::CObservationIMU& o);

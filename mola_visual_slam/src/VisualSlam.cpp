@@ -26,8 +26,10 @@
 #include <mrpt/viz/CSetOfObjects.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <sstream>
+#include <vector>
 
 using namespace mola;
 
@@ -48,6 +50,119 @@ mrpt::poses::CPose3D poseFromRt(const Eigen::Matrix3f& R, const Eigen::Vector3f&
     H(r, 3) = t(r);
   }
   return mrpt::poses::CPose3D(H);
+}
+
+/** Contrast-limited adaptive histogram equalization on an 8-bit grayscale
+ *  image. Builds one clipped, redistributed histogram per tile and bilinearly
+ *  interpolates between the four neighboring tile mappings, so there are no
+ *  block seams.
+ *
+ *  Detection thresholds are relative to each grid cell, but the LK tracker's
+ *  gradient-energy gate is absolute, so a scene whose usable texture sits in a
+ *  few grey levels loses its tracks no matter how good the corners are. Raising
+ *  local contrast puts that texture back above the gate. Global equalization
+ *  cannot do it when one part of the frame is saturated: that region owns the
+ *  histogram and everything else stays compressed.
+ */
+mrpt::img::CImage claheGray(
+    const mrpt::img::CImage& src, float clip_limit, int tiles_x, int tiles_y)
+{
+  const int cols = static_cast<int>(src.getWidth());
+  const int rows = static_cast<int>(src.getHeight());
+  const int tx   = std::max(1, tiles_x);
+  const int ty   = std::max(1, tiles_y);
+  const int tw   = std::max(1, cols / tx);
+  const int th   = std::max(1, rows / ty);
+
+  // One 256-entry mapping per tile.
+  std::vector<std::array<uint8_t, 256>> maps(static_cast<size_t>(tx * ty));
+
+  for (int gy = 0; gy < ty; ++gy)
+  {
+    for (int gx = 0; gx < tx; ++gx)
+    {
+      const int x0 = gx * tw;
+      const int y0 = gy * th;
+      const int x1 = (gx == tx - 1) ? cols : std::min(cols, x0 + tw);
+      const int y1 = (gy == ty - 1) ? rows : std::min(rows, y0 + th);
+
+      std::array<int, 256> hist{};
+      hist.fill(0);
+      for (int y = y0; y < y1; ++y)
+      {
+        const uint8_t* row = src.ptrLine<uint8_t>(y);
+        for (int x = x0; x < x1; ++x)
+        {
+          ++hist[row[x]];
+        }
+      }
+      const int npix = std::max(1, (x1 - x0) * (y1 - y0));
+
+      // Clip the histogram and hand the excess back uniformly, which is what
+      // bounds the noise amplification in nearly flat tiles.
+      const int limit  = std::max(1, static_cast<int>(clip_limit * npix / 256.0f));
+      int       excess = 0;
+      for (int& h : hist)
+      {
+        if (h > limit)
+        {
+          excess += h - limit;
+          h = limit;
+        }
+      }
+      const int share = excess / 256;
+      int       rest  = excess - share * 256;
+      for (int& h : hist)
+      {
+        h += share;
+        if (rest > 0)
+        {
+          ++h;
+          --rest;
+        }
+      }
+
+      auto& lut = maps[static_cast<size_t>(gy * tx + gx)];
+      int   cum = 0;
+      for (int v = 0; v < 256; ++v)
+      {
+        cum += hist[v];
+        lut[static_cast<size_t>(v)] = static_cast<uint8_t>(std::clamp(255 * cum / npix, 0, 255));
+      }
+    }
+  }
+
+  mrpt::img::CImage out(cols, rows, mrpt::img::CH_GRAY);
+  for (int y = 0; y < rows; ++y)
+  {
+    // Tile-center coordinates, so the interpolation weights are symmetric.
+    const float fy =
+        (static_cast<float>(y) - 0.5f * static_cast<float>(th)) / static_cast<float>(th);
+    const int   gy0 = std::clamp(static_cast<int>(std::floor(fy)), 0, ty - 1);
+    const int   gy1 = std::clamp(gy0 + 1, 0, ty - 1);
+    const float wy  = std::clamp(fy - static_cast<float>(gy0), 0.f, 1.f);
+
+    const uint8_t* srow = src.ptrLine<uint8_t>(y);
+    uint8_t*       drow = out.ptrLine<uint8_t>(y);
+    for (int x = 0; x < cols; ++x)
+    {
+      const float fx =
+          (static_cast<float>(x) - 0.5f * static_cast<float>(tw)) / static_cast<float>(tw);
+      const int   gx0 = std::clamp(static_cast<int>(std::floor(fx)), 0, tx - 1);
+      const int   gx1 = std::clamp(gx0 + 1, 0, tx - 1);
+      const float wx  = std::clamp(fx - static_cast<float>(gx0), 0.f, 1.f);
+
+      const size_t v   = srow[x];
+      const float  m00 = maps[static_cast<size_t>(gy0 * tx + gx0)][v];
+      const float  m01 = maps[static_cast<size_t>(gy0 * tx + gx1)][v];
+      const float  m10 = maps[static_cast<size_t>(gy1 * tx + gx0)][v];
+      const float  m11 = maps[static_cast<size_t>(gy1 * tx + gx1)][v];
+      const float  top = m00 + wx * (m01 - m00);
+      const float  bot = m10 + wx * (m11 - m10);
+      drow[x] = static_cast<uint8_t>(std::clamp(top + wy * (bot - top) + 0.5f, 0.f, 255.f));
+    }
+  }
+  return out;
 }
 
 /** Rodrigues exponential map of a rotation vector (axis * angle, radians). */
@@ -151,8 +266,16 @@ void VisualSlam::initialize_frontend(const Yaml& c)
     getS("state_estimator_frame_id", state_estimator_frame_id_);
     getD("fuse_sigma_xyz", fuse_sigma_xyz_);
     getD("fuse_sigma_angles_deg", fuse_sigma_angles_deg_);
+    getD("fuse_sigma_yaw_deg", fuse_sigma_yaw_deg_);
+    getD("fuse_sigma_pitchroll_deg", fuse_sigma_pitchroll_deg_);
+    getD("fuse_sigma_forward", fuse_sigma_forward_);
+    getD("fuse_sigma_lateral", fuse_sigma_lateral_);
+    getD("fuse_sigma_vertical", fuse_sigma_vertical_);
     getI("fuse_decimation", fuse_decimation_);
     getF("max_landmark_depth", max_landmark_depth_);
+    getF("clahe_clip_limit", clahe_clip_limit_);
+    getI("clahe_tiles_x", clahe_tiles_x_);
+    getI("clahe_tiles_y", clahe_tiles_y_);
     getI("max_features", max_features_);
     getF("min_distance", min_distance_);
     getI("redetect_below", redetect_below_);
@@ -433,6 +556,26 @@ void VisualSlam::handleImuObservation(const mrpt::obs::CObservationIMU& o)
   }
 }
 
+std::vector<std::pair<double, size_t>> VisualSlam::stereoResidualByRadius() const
+{
+  std::vector<std::pair<double, size_t>> out(stereo_resid_sum_.size());
+  for (size_t i = 0; i < stereo_resid_sum_.size(); ++i)
+  {
+    const size_t n = stereo_resid_count_[i];
+    out[i]         = {n ? stereo_resid_sum_[i] / static_cast<double>(n) : 0.0, n};
+  }
+  return out;
+}
+
+mrpt::img::CImage VisualSlam::enhance(const mrpt::img::CImage& gray) const
+{
+  if (clahe_clip_limit_ <= 0.f)
+  {
+    return gray;
+  }
+  return claheGray(gray, clahe_clip_limit_, clahe_tiles_x_, clahe_tiles_y_);
+}
+
 void VisualSlam::rejectInconsistentTracks(
     const mrpt::img::CImage& prev, const mrpt::img::CImage& curr,
     const std::vector<mrpt::math::TPoint2Df>& next_pts,
@@ -586,13 +729,22 @@ void VisualSlam::fuseIntoStateEstimator(const mrpt::Clock::time_point& timestamp
   mrpt::poses::CPose3DPDFGaussian p;
   p.mean = currentRobotPose();
   p.cov.setZero();
-  const double s2xyz = fuse_sigma_xyz_ * fuse_sigma_xyz_;
-  const double s2ang = mrpt::square(mrpt::DEG2RAD(fuse_sigma_angles_deg_));
-  for (int i = 0; i < 3; ++i)
-  {
-    p.cov(i, i)         = s2xyz;
-    p.cov(i + 3, i + 3) = s2ang;
-  }
+  // CPose3DPDFGaussian is ordered [x y z yaw pitch roll], so 3 is yaw and 4,5
+  // are pitch and roll.
+  const double sigYaw = (fuse_sigma_yaw_deg_ > 0) ? fuse_sigma_yaw_deg_ : fuse_sigma_angles_deg_;
+  const double sigPitchRoll =
+      (fuse_sigma_pitchroll_deg_ > 0) ? fuse_sigma_pitchroll_deg_ : fuse_sigma_angles_deg_;
+  const double sigFwd = (fuse_sigma_forward_ > 0) ? fuse_sigma_forward_ : fuse_sigma_xyz_;
+  const double sigLat = (fuse_sigma_lateral_ > 0) ? fuse_sigma_lateral_ : fuse_sigma_xyz_;
+  const double sigUp  = (fuse_sigma_vertical_ > 0) ? fuse_sigma_vertical_ : fuse_sigma_xyz_;
+
+  p.cov(0, 0) = mrpt::square(sigFwd);
+  p.cov(1, 1) = mrpt::square(sigLat);
+  p.cov(2, 2) = mrpt::square(sigUp);
+  p.cov(3, 3) = mrpt::square(mrpt::DEG2RAD(sigYaw));
+  p.cov(4, 4) = mrpt::square(mrpt::DEG2RAD(sigPitchRoll));
+  p.cov(5, 5) = mrpt::square(mrpt::DEG2RAD(sigPitchRoll));
+
   nav_state_filter_->fuse_pose(timestamp, p, state_estimator_frame_id_);
   ++num_fused_poses_;
 }
@@ -650,7 +802,7 @@ mrpt::poses::CPose3D VisualSlam::processFrame(
 
   camera_ = cam;
   profiler_.enter("grayscale");
-  const mrpt::img::CImage gray = gray_in.grayscale();
+  const mrpt::img::CImage gray = enhance(gray_in.grayscale());
   profiler_.leave("grayscale");
   ++frame_count_;
 
@@ -1071,6 +1223,12 @@ void VisualSlam::restartMapHere(
     return;  // too little texture here; try again next frame
   }
   insertCurrentKeyframeStereo(grayL, grayR, cam, baseline);
+  // A rebuilt map is a working map, so this counts as initialized even when the
+  // very first stereo pair of the session never was. Without it the module goes
+  // on tracking perfectly well while still reporting INITIALIZING forever,
+  // which silently costs the caller its whole trajectory and stops every fusion
+  // into a state estimator.
+  state_               = State::TRACKING;
   frames_since_kf_     = 0;
   frames_without_pose_ = 0;
 }
@@ -1218,10 +1376,14 @@ mrpt::poses::CPose3D VisualSlam::processStereoFrame(
 
   mrpt::system::CTimeLoggerEntry tle(profiler_, "processStereoFrame");
 
-  camera_                       = cam;
-  cur_baseline_                 = baseline;
-  const mrpt::img::CImage grayL = left.grayscale();
-  const mrpt::img::CImage grayR = right.grayscale();
+  camera_       = cam;
+  cur_baseline_ = baseline;
+  profiler_.enter("grayscale");
+  // Both views get the same enhancement, so the stereo match still compares
+  // like with like.
+  const mrpt::img::CImage grayL = enhance(left.grayscale());
+  const mrpt::img::CImage grayR = enhance(right.grayscale());
+  profiler_.leave("grayscale");
   ++frame_count_;
 
   // Measured inter-frame rotation, if a gyro stream is configured and covers
@@ -1519,6 +1681,27 @@ void VisualSlam::insertCurrentKeyframeStereo(
 {
   // Re-measure each tracked feature's disparity at this keyframe (one match).
   const auto sm = mola::vision::matchStereo(left, right, track_pts_, cam.fx(), baseline);
+
+  // Accumulate the epipolar (row) disagreement against image radius. On a
+  // correctly rectified pair the rows match everywhere, so a trend here
+  // separates a camera-model or rectification problem from matching noise.
+  for (size_t i = 0; i < track_pts_.size(); ++i)
+  {
+    if (!sm.valid[i])
+    {
+      continue;
+    }
+    const double dx = track_pts_[i].x - cam.cx();
+    const double dy = track_pts_[i].y - cam.cy();
+    const auto   b  = static_cast<size_t>(std::hypot(dx, dy) / kStereoResidualBinPx);
+    if (b >= stereo_resid_sum_.size())
+    {
+      stereo_resid_sum_.resize(b + 1, 0.0);
+      stereo_resid_count_.resize(b + 1, 0);
+    }
+    stereo_resid_sum_[b] += std::abs(track_pts_[i].y - sm.right_pts[i].y);
+    ++stereo_resid_count_[b];
+  }
 
   KeyframeRec kf;
   kf.pose_cw = pose_cw_;
