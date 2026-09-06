@@ -116,6 +116,13 @@ modules:
       # directions, so every stereo match then fails and the map stays empty.
       # Uncomment for such a mission:
       # left_image_rotate_180: true
+      # Note this rotates the IMAGE only. That is correct here, because the
+      # calibration describes the upright image, so rotating the stream back
+      # restores agreement with it. Do NOT also reflect the principal point:
+      # tried on arc-3, it took the restarts over the first 970 frames from 183
+      # to 927. Add `clahe_clip_limit: 3.0` for a mission this dark; it improves
+      # short-window tracking (arc-3 5 s error 0.227 -> 0.191 m) without
+      # improving the whole-mission result.
       # Gyro-aided rotation prediction. A legged robot reaches ~90 deg/s in a
       # single stride transition, which is 9 deg between two 10 Hz frames; the
       # constant-velocity model cannot see that angular acceleration coming, the
@@ -124,9 +131,17 @@ modules:
       # into an otherwise centimetre-accurate run. Requires the IMU bag (see
       # rosbag_filename above); without it this line is inert.
       imu_label: imu
-      max_features: 500
-      min_distance: 12.0
-      redetect_below: 200
+      # Feature budget. On the trimmed canvas above, more features buy position
+      # accuracy and cost nothing in attitude (heap-1 whole mission at 250 /
+      # 500 / 800 features: 0.360 / 0.252 / 0.245 m, with the per-increment
+      # rotation flat at 0.039 / 0.037 / 0.037 deg). On a texture-starved
+      # mission the same knob decides whether tracking survives at all: arc-3's
+      # first 100 s goes 9.8 / 4.4 / 3.1 m across that range. Past about 800 the
+      # detector starts returning weaker corners and it reverses (1200
+      # features: 3.3 m).
+      max_features: 800
+      min_distance: 9.0
+      redetect_below: 350
       lk_win_size: 21
       lk_max_levels: 3
       # Keyframes retained in the bundle adjustment. Observations that fall out
@@ -134,6 +149,16 @@ modules:
       # window keeps more of the structure that pins the recent poses.
       ba_window_size: 20
       min_pnp_points: 12
+      # Coast through a bad patch instead of resetting on it. Wiping the local
+      # map throws away good structure and freezes the pose while the robot
+      # keeps walking, so in a dark stretch the estimate simply stops; with the
+      # gyro supplying rotation, dead reckoning for up to 1.5 s is much the
+      # lesser evil. Inert on a well-lit mission (heap-1 never triggers a
+      # restart at all); on arc-3's first 100 s this pair takes the restart
+      # count from 41 to 6 and the error from 3.10 m to 2.05 m. The two were
+      # measured together, not separately.
+      lost_max_frames: 15
+      min_pnp_inlier_ratio: 0.25
       kf_max_frames_gap: 10
       kf_min_frames_gap: 2
       kf_min_tracked: 120

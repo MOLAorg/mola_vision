@@ -28,7 +28,11 @@ Packages:
   `clahe_clip_limit` applies contrast-limited adaptive histogram equalization
   before detection and tracking, for scenes whose usable texture spans only a
   few grey levels: detection thresholds are relative to each grid cell, but the
-  LK gradient-energy gate is absolute. The per-axis `fuse_sigma_*` parameters
+  LK gradient-energy gate is absolute. On a texture-starved mission (arc-3) the
+  levers that matter are, in order, the canvas trim together with a bigger
+  `max_features`, then `lost_max_frames` (coast through a bad patch instead of
+  wiping the local map on it), then CLAHE, which improves short-window tracking
+  without improving the whole-mission result. The per-axis `fuse_sigma_*` parameters
   refine the isotropic fused covariance (each falls back to it when 0). The CLI
   prints the stereo epipolar residual binned by image radius, which checks
   rectification quality without any ground truth: on a correct rectification it
