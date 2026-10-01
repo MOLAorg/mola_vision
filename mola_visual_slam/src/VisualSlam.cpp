@@ -1569,6 +1569,12 @@ mrpt::poses::CPose3D VisualSlam::processStereoFrame(
     }
     frames_since_kf_ = 0;
     publishMap(timestamp);
+    // A localized stereo keyframe means a working metric map, even if the very
+    // first stereo pair had too few matches to bootstrap one directly.
+    if (frames_without_pose_ == 0)
+    {
+      state_ = State::TRACKING;
+    }
   }
 
   prev_gray_ = grayL;
