@@ -7,6 +7,11 @@
 # ------------------------------------------------------------------------------
 
 cmake_minimum_required(VERSION 3.5)
+
+if("$ENV{ROS_VERSION}" STREQUAL "2")
+  set(DETECTED_ROS2 TRUE)
+endif()
+
 project(mola_visual_tracking LANGUAGES CXX)
 
 # MOLA CMake scripts: "mola_xxx()"
