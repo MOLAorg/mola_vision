@@ -463,7 +463,8 @@ class VisualSlam : public mola::FrontEndBase,
   /** Constant-velocity extrapolation of the camera-in-world pose. */
   [[nodiscard]] mrpt::poses::CPose3D predictedPoseWc() const;
 
-  /** Updates frame_dt_, frame_period_ and last_frame_ts_ for a new frame. */
+  /** Updates frame_dt_, frame_period_ and last_frame_ts_ for a new frame;
+   *  drops the velocity if time went backward. */
   void updateFrameTiming(double frame_ts);
 
   /** Localizes the current frame from 3D-2D correspondences (robust PnP, seeded
