@@ -5,6 +5,8 @@
 # or a TUM RGB-D sequence converted to .rawlog).
 #
 # Usage:
+#   mola-rgbd-gui-rawlog /path/to/sequence.rawlog [SENSOR_LABEL]
+# or directly:
 #   RGBD_RAWLOG=/path/to/sequence.rawlog \
 #   RGBD_SENSOR_LABEL=CAMERA1 \
 #   mola-cli rgbd_slam_from_rawlog.yaml

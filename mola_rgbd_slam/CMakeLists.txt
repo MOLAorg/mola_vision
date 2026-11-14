@@ -64,6 +64,14 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+# Install the dataset wrappers (they find the launch files relative to bin/):
+install(
+  PROGRAMS
+    scripts/mola-rgbd-gui-rosbag2
+    scripts/mola-rgbd-gui-rawlog
+  DESTINATION bin
+)
+
 # Unit tests:
 enable_testing()
 add_subdirectory(tests)

@@ -1,5 +1,9 @@
 find_package(GTest REQUIRED)
 include(GoogleTest)
+# List the tests when they run, not at build time: at build time, the test
+# binaries could load an older installed copy of the libraries of an overlay
+# workspace, and fail.
+set(CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
 
 # Helper macro matching the MOLA pattern
 macro(mola_vision_add_test NAME)
