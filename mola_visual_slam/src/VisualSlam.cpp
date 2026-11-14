@@ -1201,6 +1201,11 @@ bool VisualSlam::solveFramePose(
     }
   }
 
+  if (frame_dt_ < 0)
+  {
+    // Time went backward: the velocity stays reset (updateFrameTiming()).
+    return pose_updated;
+  }
   // A dead-reckoned increment spans the capped extrapolation, not the gap.
   const double dt = frame_dt_ > 0 ? frame_dt_ : frame_period_;
   last_motion_    = pose_wc_ - prev_wc;
