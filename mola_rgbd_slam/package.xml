@@ -27,6 +27,7 @@
   <!-- Runtime modules used by the demo launch files -->
   <exec_depend>mola_viz</exec_depend>
   <exec_depend>mola_launcher</exec_depend>
+  <exec_depend>mola_input_rosbag2</exec_depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
 

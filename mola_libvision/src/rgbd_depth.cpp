@@ -134,10 +134,15 @@ mrpt::math::CMatrixFloat mola::vision::registerDepthToCamera(
   const float cxt = static_cast<float>(target_cam.cx());
   const float cyt = static_cast<float>(target_cam.cy());
 
-  // Side of the splatted square, in target pixels:
-  const float ratio = std::max(fxt / fxd, fyt / fyd);
-  const int   n     = std::clamp(static_cast<int>(std::ceil(ratio - 1e-3f)), 1, 3);
-  const float half  = 0.5f * static_cast<float>(n - 1);
+  // Size of the splatted rectangle, in target pixels, per axis (bounded, so a
+  // wrong calibration cannot make it unreasonably costly):
+  const auto splat = [](float ratio)
+  { return std::clamp(static_cast<int>(std::ceil(ratio - 1e-3f)), 1, 8); };
+  const int   nx     = splat(fxt / fxd);
+  const int   ny     = splat(fyt / fyd);
+  const float halfX  = 0.5f * static_cast<float>(nx - 1);
+  const float halfY  = 0.5f * static_cast<float>(ny - 1);
+  const float margin = static_cast<float>(std::max(nx, ny));
 
   for (int r = 0; r < Hd; ++r)
   {
@@ -156,25 +161,25 @@ mrpt::math::CMatrixFloat mola::vision::registerDepthToCamera(
         continue;
       }
       const float invZ = 1.0f / P.z();
-      // Top-left pixel of the splatted square (the nearest one, if n=1):
-      const float uf = fxt * P.x() * invZ + cxt - half + 0.5f;
-      const float vf = fyt * P.y() * invZ + cyt - half + 0.5f;
-      // Also keeps the int conversion below in range:
-      if (!(uf > -4.f && vf > -4.f && uf < static_cast<float>(Wt) + 4.f &&
-            vf < static_cast<float>(Ht) + 4.f))
+      // Top-left pixel of the splatted rectangle (the nearest one, if 1x1):
+      const float uf = fxt * P.x() * invZ + cxt - halfX + 0.5f;
+      const float vf = fyt * P.y() * invZ + cyt - halfY + 0.5f;
+      // Also keeps the int conversion below in range (and rejects NaN):
+      if (!(uf > -margin && vf > -margin && uf < static_cast<float>(Wt) + margin &&
+            vf < static_cast<float>(Ht) + margin))
       {
         continue;
       }
       const int u0 = floorToInt(uf);
       const int v0 = floorToInt(vf);
-      for (int dv = 0; dv < n; ++dv)
+      for (int dv = 0; dv < ny; ++dv)
       {
         const int vv = v0 + dv;
         if (vv < 0 || vv >= Ht)
         {
           continue;
         }
-        for (int du = 0; du < n; ++du)
+        for (int du = 0; du < nx; ++du)
         {
           const int uu = u0 + du;
           if (uu < 0 || uu >= Wt)
