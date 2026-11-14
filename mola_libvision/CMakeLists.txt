@@ -36,6 +36,7 @@ set(LIB_SRCS
   src/stereo_matcher.cpp
   src/sliding_window_ba.cpp
   src/rgbd_depth.cpp
+  src/motion_model.cpp
   src/keyframe_database.cpp
   src/imu_preintegration.cpp
   src/gravity_estimator.cpp
@@ -63,6 +64,7 @@ set(LIB_PUBLIC_HDRS
   include/mola_libvision/sliding_window_ba.h
   include/mola_libvision/lie_utils.h
   include/mola_libvision/rgbd_depth.h
+  include/mola_libvision/motion_model.h
   include/mola_libvision/keyframe_database.h
   include/mola_libvision/keyframe_selector.h
   include/mola_libvision/imu_preintegration.h

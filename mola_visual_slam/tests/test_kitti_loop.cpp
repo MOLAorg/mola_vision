@@ -94,6 +94,27 @@ double ate(const std::vector<Eigen::Vector3d>& A, const std::vector<Eigen::Vecto
   }
   return std::sqrt(sse / static_cast<double>(m));
 }
+
+// Capture time of each frame (times.txt), or the nominal 10 Hz period if
+// missing. The constant-velocity motion model scales by the time between frames,
+// so the processing time (wall clock) must not stand in for it.
+std::vector<double> loadKittiTimes(const std::string& seqDir)
+{
+  std::vector<double> times;
+  std::ifstream       f(seqDir + "/times.txt");
+  double              t = 0;
+  while (f >> t)
+  {
+    times.push_back(t);
+  }
+  return times;
+}
+
+mrpt::Clock::time_point kittiStamp(const std::vector<double>& times, size_t i)
+{
+  return mrpt::Clock::fromDouble(
+      1.0 + (i < times.size() ? times[i] : 0.1 * static_cast<double>(i)));
+}
 }  // namespace
 
 TEST(KittiLoop, StereoLoopClosureReducesDrift)
@@ -132,6 +153,7 @@ TEST(KittiLoop, StereoLoopClosureReducesDrift)
   };
   std::vector<KF> kfs;
 
+  const auto times = loadKittiTimes(dir);
   for (size_t i = 0; i < max_frames; ++i)
   {
     const std::string lp = dir + "/image_0/" + frameName(static_cast<int>(i));
@@ -147,7 +169,7 @@ TEST(KittiLoop, StereoLoopClosureReducesDrift)
       cam.setIntrinsicParamsFromValues(fx, fy, cx, cy);
       camReady = true;
     }
-    const auto pose = slam.processStereoFrame(left, right, cam, baseline, mrpt::Clock::now());
+    const auto pose = slam.processStereoFrame(left, right, cam, baseline, kittiStamp(times, i));
     if (slam.isInitialized() && (i % kf_stride == 0))
     {
       kfs.push_back({static_cast<int>(i), pose, left, right});

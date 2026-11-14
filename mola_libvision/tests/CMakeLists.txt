@@ -154,3 +154,10 @@ mola_vision_add_test(test_orb_loop_detector
 mola_vision_add_test(test_loop_closure
   SOURCES test_loop_closure.cpp
 )
+
+# ----------------------------------------------------------------------------
+# Test: constant-velocity motion model
+# ----------------------------------------------------------------------------
+mola_vision_add_test(test_motion_model
+  SOURCES test_motion_model.cpp
+)
