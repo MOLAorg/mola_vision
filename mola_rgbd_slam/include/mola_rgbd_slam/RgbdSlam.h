@@ -8,6 +8,8 @@
 #include <mola_kernel/interfaces/FrontEndBase.h>
 #include <mola_kernel/interfaces/LocalizationSourceBase.h>
 #include <mola_kernel/interfaces/MapSourceBase.h>
+#include <mola_libvision/motion_model.h>
+#include <mola_libvision/optical_flow.h>
 #include <mrpt/img/CImage.h>
 #include <mrpt/img/TCamera.h>
 #include <mrpt/math/TPoint2D.h>
@@ -148,6 +150,8 @@ class RgbdSlam : public mola::FrontEndBase,
   int         ba_window_size_ = 8;  ///< number of recent keyframes in the BA window
   int         cull_min_obs_   = 2;  ///< cull dropped landmarks observed in fewer keyframes
   // keyframe-selection policy (mola_libvision KeyframeSelectorParams subset):
+  float       velocity_window_      = 0.3f;  ///< [s] past poses that estimate the velocity
+  float       max_extrapolation_    = 1.5f;  ///< [s] longest constant-velocity prediction
   int         kf_max_frames_gap_    = 20;
   int         kf_min_frames_gap_    = 2;
   int         kf_min_tracked_       = 80;
@@ -208,6 +212,31 @@ class RgbdSlam : public mola::FrontEndBase,
   void publishViz2D(const mrpt::img::CImage& gray, bool just_initialized);
   void publishViz3D();
   void runWindowedBA();
+
+  /** One tracking + localization attempt of the current frame. */
+  struct TrackAttempt
+  {
+    std::vector<mrpt::math::TPoint2Df>     next_pts;
+    std::vector<mola::vision::TrackStatus> status;
+    std::vector<bool>                      outlier;  ///< PnP outliers, per tracked feature
+    float                                  parallax_sum = 0.f;
+    int                                    parallax_n   = 0;
+    int                                    inliers      = 0;
+    bool                                   localized    = false;
+    mrpt::poses::CPose3D                   pose_cw;
+  };
+
+  /** Tracks the features into \p gray with LK and localizes the frame with
+   *  PnP, both seeded with \p seed_wc. With \p projectSeed, the LK guess of
+   *  each feature is its landmark projected from the seed; otherwise, its
+   *  previous pixel. */
+  TrackAttempt trackFrame(
+      const mrpt::img::CImage& gray, const mrpt::poses::CPose3D& seed_wc, bool projectSeed,
+      const mrpt::img::TCamera& cam);
+
+  mola::vision::ConstantVelocityModel motion_;  ///< of the camera (pose_wc_)
+  double last_frame_time_ = 0;  ///< [s] timestamp of the previous frame
+  double frame_period_    = 0;  ///< [s] running average, to detect gaps in the stream
 };
 
 }  // namespace mola
