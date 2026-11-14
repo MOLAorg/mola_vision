@@ -11,6 +11,7 @@
 #include <mola_libvision/sliding_window_ba.h>
 #include <mola_rgbd_slam/RgbdSlam.h>
 #include <mrpt/containers/yaml.h>
+#include <mrpt/core/lock_helper.h>
 #include <mrpt/img/TColor.h>
 #include <mrpt/maps/CSimplePointsMap.h>
 #include <mrpt/obs/CObservation3DRangeScan.h>
@@ -196,20 +197,22 @@ void RgbdSlam::onNewObservation(const CObservation::ConstPtr& o)
       return *depth_m;
     }
     mrpt::system::CTimeLoggerEntry tle(profiler_, "registerDepth");
-    mrpt::img::TCamera             depthCam = obs->cameraParams;
-    depthCam.ncols                          = static_cast<uint32_t>(obs->rangeImage.cols());
-    depthCam.nrows                          = static_cast<uint32_t>(obs->rangeImage.rows());
     // Points from the depth optical frame into the intensity optical frame:
     const auto intensityFromDepth =
         (-obs->relativePoseIntensityWRTDepth) + mola::vision::opticalFrameInXForwardFrame();
     depth_m = mola::vision::registerDepthToCamera(
-        obs->rangeImage, obs->rangeUnits, depthCam, cam, intensityFromDepth);
+        obs->rangeImage, obs->rangeUnits, obs->cameraParams, cam, intensityFromDepth);
     return *depth_m;
   };
 
-  if (!camera_pose_on_robot_)
+  // An identity sensorPose means "unknown", as in VisualSlam: poses are then
+  // reported for the camera itself.
+  if (!camera_pose_on_robot_ && obs->sensorPose.asVectorVal().norm() > 1e-9)
   {
-    camera_pose_on_robot_ = obs->sensorPose + obs->relativePoseIntensityWRTDepth;
+    // Pose of the tracked camera's optical frame on the robot:
+    camera_pose_on_robot_ =
+        obs->sensorPose + (hasIntensityCalib ? obs->relativePoseIntensityWRTDepth
+                                             : mola::vision::opticalFrameInXForwardFrame());
     MRPT_LOG_INFO_STREAM(
         "Camera-on-robot extrinsic taken from the observations: " << *camera_pose_on_robot_);
   }
@@ -580,6 +583,7 @@ void RgbdSlam::recordPose(const mrpt::Clock::time_point& timestamp)
 {
   if (!estimated_trajectory_file_.empty())
   {
+    auto lck = mrpt::lockHelper(estimated_trajectory_mtx_);
     estimated_trajectory_.insert(timestamp, currentRobotPose());
   }
 }
@@ -590,10 +594,20 @@ void RgbdSlam::onQuit()
   {
     return;
   }
+  // Observations arrive in the data source's thread, while this runs in the
+  // module's own one:
+  mrpt::poses::CPose3DInterpolator traj;
+  {
+    auto lck = mrpt::lockHelper(estimated_trajectory_mtx_);
+    traj     = estimated_trajectory_;
+  }
   MRPT_LOG_INFO_STREAM(
-      "Saving estimated trajectory (" << estimated_trajectory_.size() << " poses) to '"
-                                      << estimated_trajectory_file_ << "' in TUM format.");
-  estimated_trajectory_.saveToTextFile_TUM(estimated_trajectory_file_);
+      "Saving estimated trajectory (" << traj.size() << " poses) to '" << estimated_trajectory_file_
+                                      << "' in TUM format.");
+  if (!traj.saveToTextFile_TUM(estimated_trajectory_file_))
+  {
+    MRPT_LOG_ERROR_STREAM("Could not write '" << estimated_trajectory_file_ << "'");
+  }
 }
 
 mrpt::poses::CPose3D RgbdSlam::currentRobotPose() const

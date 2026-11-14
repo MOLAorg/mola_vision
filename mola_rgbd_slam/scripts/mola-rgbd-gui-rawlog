@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Runs MOLA RGB-D visual odometry (mola::RgbdSlam) on an MRPT rawlog with
+# CObservation3DRangeScan observations (e.g. TUM RGB-D), through mola-cli
+# (online replay, 3D GUI). Extra arguments are forwarded to mola-cli.
+set -euo pipefail
+
+usage() {
+  echo "Usage: $0 /path/to/dataset.rawlog [SENSOR_LABEL] [additional mola-cli flags]"
+  echo ""
+  echo "  SENSOR_LABEL defaults to RGBD_SENSOR_LABEL, or 'CAMERA1'."
+  echo "  MOLA_TIME_WARP sets the playback speed (default: 1.0)."
+}
+
+if [ "$#" -lt 1 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+  usage
+  [ "$#" -ge 1 ] && exit 0
+  exit 1
+fi
+
+RGBD_RAWLOG=$1
+shift
+if [ ! -f "$RGBD_RAWLOG" ]; then
+  echo "Error: '$RGBD_RAWLOG' does not exist." >&2
+  exit 1
+fi
+if [ "$#" -ge 1 ] && [ "${1#-}" = "$1" ]; then
+  RGBD_SENSOR_LABEL=$1
+  shift
+fi
+: "${RGBD_SENSOR_LABEL:=CAMERA1}"
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
+LAUNCH="$SCRIPT_DIR/../mola-cli-launchs/rgbd_slam_from_rawlog.yaml"
+if [ ! -f "$LAUNCH" ]; then
+  LAUNCH="$SCRIPT_DIR/../share/mola_rgbd_slam/mola-cli-launchs/rgbd_slam_from_rawlog.yaml"
+fi
+
+export RGBD_RAWLOG RGBD_SENSOR_LABEL
+exec mola-cli "$LAUNCH" "$@"
