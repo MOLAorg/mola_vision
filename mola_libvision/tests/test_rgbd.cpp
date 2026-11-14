@@ -216,6 +216,30 @@ TEST(RGBD, RegisterDepthNoHolesPerAxis)
   }
 }
 
+TEST(RGBD, RegisterDepthSplatIsRectangular)
+{
+  // A single sample covers 1x2 or 2x1 target pixels, not a 2x2 square.
+  const auto depthCam = makeCamera(80, 60);
+  auto       raw      = flatDepth(80, 60, 0);
+  raw(30, 40)         = 1000;
+  auto targetCam      = makeCamera(80, 60);
+
+  targetCam.setIntrinsicParamsFromValues(500.0, 1000.0, 40.0, 30.0);
+  auto out =
+      registerDepthToCamera(raw, 1e-3f, depthCam, targetCam, mrpt::poses::CPose3D::Identity());
+  EXPECT_NEAR(out(30, 40), 1.0f, 1e-4f);
+  EXPECT_NEAR(out(31, 40), 1.0f, 1e-4f);
+  EXPECT_EQ(out(30, 41), 0.0f);
+  EXPECT_EQ(out(30, 39), 0.0f);
+
+  targetCam.setIntrinsicParamsFromValues(1000.0, 500.0, 40.0, 30.0);
+  out = registerDepthToCamera(raw, 1e-3f, depthCam, targetCam, mrpt::poses::CPose3D::Identity());
+  EXPECT_NEAR(out(30, 40), 1.0f, 1e-4f);
+  EXPECT_NEAR(out(30, 41), 1.0f, 1e-4f);
+  EXPECT_EQ(out(31, 40), 0.0f);
+  EXPECT_EQ(out(29, 40), 0.0f);
+}
+
 TEST(RGBD, RegisterDepthZBufferKeepsNearestOfColliding)
 {
   // A target camera at half resolution receives two source columns (and rows)
