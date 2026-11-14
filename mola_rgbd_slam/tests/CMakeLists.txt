@@ -1,5 +1,9 @@
 find_package(GTest REQUIRED)
 include(GoogleTest)
+# List the tests when they run, not at build time: at build time, the test
+# binaries could load an older installed copy of the libraries of an overlay
+# workspace, and fail.
+set(CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
 
 add_executable(test_rgbd_slam test_rgbd_slam.cpp)
 target_link_libraries(test_rgbd_slam
