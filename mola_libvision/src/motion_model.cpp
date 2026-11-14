@@ -20,17 +20,8 @@ using Vec6 = mrpt::math::CVectorFixedDouble<6>;
 // twist (e.g. driving along an arc) maps to exp(t * twist). MRPT's
 // Lie::SE<3> uses a pseudo-exponential (translation not coupled with the
 // rotation), which does not model constant-velocity motion while turning.
-Eigen::Matrix3d leftJacobianSO3(const Eigen::Vector3d& w)
-{
-  const double          th = w.norm();
-  const Eigen::Matrix3d K  = skew(w);
-  if (th < 1e-8)
-  {
-    return Eigen::Matrix3d::Identity() + 0.5 * K;
-  }
-  return Eigen::Matrix3d::Identity() + (1.0 - std::cos(th)) / (th * th) * K +
-         (th - std::sin(th)) / (th * th * th) * K * K;
-}
+// The left Jacobian of SO(3) is Jl(w) = Jr(-w).
+Eigen::Matrix3d leftJacobianSO3(const Eigen::Vector3d& w) { return rightJacobianSO3(-w); }
 
 mrpt::poses::CPose3D se3Exp(const Vec6& x)
 {

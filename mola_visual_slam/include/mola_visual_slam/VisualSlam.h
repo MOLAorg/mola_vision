@@ -363,6 +363,7 @@ class VisualSlam : public mola::FrontEndBase,
   bool                               have_motion_    = false;
   double                             last_motion_dt_ = 0;  ///< [s] time spanned by last_motion_
   double                             frame_dt_       = 0;  ///< [s] time since the previous frame
+  double                             frame_period_   = 0;  ///< [s] smoothed frame period
   std::vector<mrpt::math::TPoint3D>  trajectory_;
   mrpt::img::TCamera                 camera_;
   int                                frame_count_         = 0;
@@ -461,6 +462,9 @@ class VisualSlam : public mola::FrontEndBase,
   void detectInitialFeatures(const mrpt::img::CImage& gray);
   /** Constant-velocity extrapolation of the camera-in-world pose. */
   [[nodiscard]] mrpt::poses::CPose3D predictedPoseWc() const;
+
+  /** Updates frame_dt_, frame_period_ and last_frame_ts_ for a new frame. */
+  void updateFrameTiming(double frame_ts);
 
   /** Localizes the current frame from 3D-2D correspondences (robust PnP, seeded
    *  by a constant-velocity prediction) and updates pose_cw_ / pose_wc_ /

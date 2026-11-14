@@ -94,10 +94,7 @@ double ate(const std::vector<Eigen::Vector3d>& A, const std::vector<Eigen::Vecto
   }
   return std::sqrt(sse / static_cast<double>(m));
 }
-}  // namespace
 
-namespace
-{
 // Capture time of each frame (times.txt), or the nominal 10 Hz period if
 // missing. The constant-velocity motion model scales by the time between frames,
 // so the processing time (wall clock) must not stand in for it.

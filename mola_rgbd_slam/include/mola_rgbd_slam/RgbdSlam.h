@@ -139,19 +139,19 @@ class RgbdSlam : public mola::FrontEndBase,
  private:
   // ---- parameters ----
   std::string sensor_label_;  ///< only process observations with this label (empty = any)
-  int         max_features_   = 400;
-  float       min_distance_   = 12.0f;
-  int         redetect_below_ = 150;  ///< spawn new landmarks when tracked count drops below this
-  int         lk_win_size_    = 11;
-  int         lk_max_levels_  = 3;
-  int         min_pnp_points_ = 12;  ///< minimum 3D-2D matches to trust PnP
-  float       min_depth_      = 0.2f;
-  float       max_depth_      = 8.0f;
-  int         ba_window_size_ = 8;  ///< number of recent keyframes in the BA window
-  int         cull_min_obs_   = 2;  ///< cull dropped landmarks observed in fewer keyframes
+  int         max_features_    = 400;
+  float       min_distance_    = 12.0f;
+  int         redetect_below_  = 150;  ///< spawn new landmarks when tracked count drops below this
+  int         lk_win_size_     = 11;
+  int         lk_max_levels_   = 3;
+  int         min_pnp_points_  = 12;  ///< minimum 3D-2D matches to trust PnP
+  float       velocity_window_ = 0.3f;  ///< [s] past poses that estimate the velocity
+  float       max_extrapolation_ = 1.5f;  ///< [s] longest constant-velocity prediction
+  float       min_depth_         = 0.2f;
+  float       max_depth_         = 8.0f;
+  int         ba_window_size_    = 8;  ///< number of recent keyframes in the BA window
+  int         cull_min_obs_      = 2;  ///< cull dropped landmarks observed in fewer keyframes
   // keyframe-selection policy (mola_libvision KeyframeSelectorParams subset):
-  float       velocity_window_      = 0.3f;  ///< [s] past poses that estimate the velocity
-  float       max_extrapolation_    = 1.5f;  ///< [s] longest constant-velocity prediction
   int         kf_max_frames_gap_    = 20;
   int         kf_min_frames_gap_    = 2;
   int         kf_min_tracked_       = 80;

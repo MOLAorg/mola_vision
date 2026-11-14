@@ -315,17 +315,29 @@ mrpt::poses::CPose3D RgbdSlam::processFrame(
   // retry assuming no motion. If both fail right after a gap in the frame
   // stream, the predicted pose is used (dead reckoning).
   // -----------------------------------------------------------------------
-  const double t         = mrpt::Clock::toDouble(timestamp);
-  const auto   pred_wc   = motion_.hasVelocity() ? motion_.predict(t) : pose_wc_;
-  const bool   predMoves = (pred_wc.asVectorVal() - pose_wc_.asVectorVal()).norm() > 1e-4;
-
-  const double frameDt  = t - last_frame_time_;
-  const bool   afterGap = frame_period_ > 0 && frameDt > 2.5 * frame_period_;
-  if (frameDt > 0 && !afterGap)
+  const double t       = mrpt::Clock::toDouble(timestamp);
+  const double frameDt = t - last_frame_time_;
+  if (frameDt < 0)
   {
-    frame_period_ = frame_period_ > 0 ? 0.9 * frame_period_ + 0.1 * frameDt : frameDt;
+    // Time went backward (e.g. a replayed dataset): restart the velocity.
+    MRPT_LOG_THROTTLE_WARN_STREAM(
+        2.0, "Frame timestamp " << -frameDt << " s older than the previous one; "
+                                << "resetting the motion model.");
+    motion_.reset();
+    motion_.addPose(t, pose_wc_);
+    last_frame_time_ = t;
   }
-  last_frame_time_ = t;
+  const bool afterGap = frame_period_ > 0 && frameDt > 2.5 * frame_period_;
+  if (frameDt > 0)
+  {
+    // Clamped samples: a gap does not inflate the period, a lasting lower
+    // frame rate is still followed within a few frames.
+    const double sample = frame_period_ > 0 ? std::min(frameDt, 2.5 * frame_period_) : frameDt;
+    frame_period_       = frame_period_ > 0 ? 0.9 * frame_period_ + 0.1 * sample : sample;
+    last_frame_time_    = t;
+  }
+  const auto pred_wc   = motion_.hasVelocity() ? motion_.predict(t) : pose_wc_;
+  const bool predMoves = (pred_wc.asVectorVal() - pose_wc_.asVectorVal()).norm() > 1e-4;
 
   TrackAttempt trk = trackFrame(gray, pred_wc, predMoves, cam);
   if (!trk.localized && predMoves)
