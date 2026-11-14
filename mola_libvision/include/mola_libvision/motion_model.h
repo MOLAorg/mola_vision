@@ -37,9 +37,11 @@ class ConstantVelocityModel
   };
 
   ConstantVelocityModel() = default;
-  explicit ConstantVelocityModel(const Parameters& p) : params_(p) {}
+  /** Throws if a parameter is negative. */
+  explicit ConstantVelocityModel(const Parameters& p) { setParameters(p); }
 
-  void                            setParameters(const Parameters& p) { params_ = p; }
+  /** Throws if a parameter is negative. */
+  void                            setParameters(const Parameters& p);
   [[nodiscard]] const Parameters& parameters() const { return params_; }
 
   void reset() { history_.clear(); }

@@ -6,6 +6,7 @@
 #include <mola_libvision/rgbd_depth.h>
 
 #include <cmath>
+#include <utility>
 
 using namespace mola::vision;
 
@@ -190,6 +191,78 @@ TEST(RGBD, RegisterDepthNoHolesWhenUpsampling)
     for (int c = 10; c < 310; ++c)
     {
       ASSERT_NEAR(out(r, c), 1.0f, 1e-4f) << "r=" << r << " c=" << c;
+    }
+  }
+}
+
+TEST(RGBD, RegisterDepthNoHolesPerAxis)
+{
+  // Each axis follows its own focal-length ratio, also beyond 3x.
+  const auto depthCam = makeCamera(80, 60);
+  const auto raw      = flatDepth(80, 60, 1000);
+  for (const auto& [fx, fy] : {std::pair{500.0, 1000.0}, std::pair{2000.0, 2000.0}})
+  {
+    auto targetCam = makeCamera(80, 60);
+    targetCam.setIntrinsicParamsFromValues(fx, fy, 40.0, 30.0);
+    const auto out =
+        registerDepthToCamera(raw, 1e-3f, depthCam, targetCam, mrpt::poses::CPose3D::Identity());
+    for (int r = 10; r < 50; ++r)
+    {
+      for (int c = 10; c < 70; ++c)
+      {
+        ASSERT_NEAR(out(r, c), 1.0f, 1e-4f) << "fx=" << fx << " fy=" << fy << " r=" << r;
+      }
+    }
+  }
+}
+
+TEST(RGBD, RegisterDepthSplatIsRectangular)
+{
+  // A single sample covers 1x2 or 2x1 target pixels, not a 2x2 square.
+  const auto depthCam = makeCamera(80, 60);
+  auto       raw      = flatDepth(80, 60, 0);
+  raw(30, 40)         = 1000;
+  auto targetCam      = makeCamera(80, 60);
+
+  targetCam.setIntrinsicParamsFromValues(500.0, 1000.0, 40.0, 30.0);
+  auto out =
+      registerDepthToCamera(raw, 1e-3f, depthCam, targetCam, mrpt::poses::CPose3D::Identity());
+  EXPECT_NEAR(out(30, 40), 1.0f, 1e-4f);
+  EXPECT_NEAR(out(31, 40), 1.0f, 1e-4f);
+  EXPECT_EQ(out(30, 41), 0.0f);
+  EXPECT_EQ(out(30, 39), 0.0f);
+
+  targetCam.setIntrinsicParamsFromValues(1000.0, 500.0, 40.0, 30.0);
+  out = registerDepthToCamera(raw, 1e-3f, depthCam, targetCam, mrpt::poses::CPose3D::Identity());
+  EXPECT_NEAR(out(30, 40), 1.0f, 1e-4f);
+  EXPECT_NEAR(out(30, 41), 1.0f, 1e-4f);
+  EXPECT_EQ(out(31, 40), 0.0f);
+  EXPECT_EQ(out(29, 40), 0.0f);
+}
+
+TEST(RGBD, RegisterDepthZBufferKeepsNearestOfColliding)
+{
+  // A target camera at half resolution receives two source columns (and rows)
+  // per pixel. The farther sample is visited after the nearer one, so plain
+  // assignment instead of a z-buffer would leave the farther depth.
+  const auto depthCam  = makeCamera(64, 48);
+  auto       targetCam = makeCamera(32, 24);
+  targetCam.setIntrinsicParamsFromValues(250.0, 250.0, 16.0, 12.0);
+  auto raw = flatDepth(64, 48, 2000);
+  for (int r = 0; r < 48; ++r)
+  {
+    for (int c = 1; c < 64; c += 2)
+    {
+      raw(r, c) = 1000;
+    }
+  }
+  const auto out =
+      registerDepthToCamera(raw, 1e-3f, depthCam, targetCam, mrpt::poses::CPose3D::Identity());
+  for (int r = 2; r < 22; ++r)
+  {
+    for (int c = 2; c < 30; ++c)
+    {
+      ASSERT_NEAR(out(r, c), 1.0f, 1e-5f) << "r=" << r << " c=" << c;
     }
   }
 }

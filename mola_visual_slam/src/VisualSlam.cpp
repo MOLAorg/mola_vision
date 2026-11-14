@@ -261,6 +261,7 @@ void VisualSlam::initialize_frontend(const Yaml& c)
     getS("imu_pose_on_robot", imu_pose_on_robot_str_);
     getD("imu_max_gap", imu_max_gap_);
     getD("max_extrapolation", max_extrapolation_);
+    ASSERT_GE_(max_extrapolation_, 0.0);
     getB("left_image_rotate_180", left_image_rotate_180_);
     getB("right_image_rotate_180", right_image_rotate_180_);
     getS("rectify_output_size", rectify_output_size_str_);
@@ -1068,10 +1069,16 @@ void VisualSlam::updateFrameTiming(double frame_ts)
     const double sample = frame_period_ > 0 ? std::min(frame_dt_, 2.5 * frame_period_) : frame_dt_;
     frame_period_       = frame_period_ > 0 ? 0.9 * frame_period_ + 0.1 * sample : sample;
   }
-  if (!last_frame_ts_ || frame_ts > *last_frame_ts_)
+  if (frame_dt_ < 0)
   {
-    last_frame_ts_ = frame_ts;
+    // Time went backward (e.g. a replayed dataset): restart the velocity.
+    MRPT_LOG_THROTTLE_WARN_STREAM(
+        2.0, "Frame timestamp " << -frame_dt_ << " s older than the previous one; "
+                                << "resetting the motion model.");
+    have_motion_ = false;
+    last_motion_ = mrpt::poses::CPose3D::Identity();
   }
+  last_frame_ts_ = frame_ts;
 }
 
 mrpt::poses::CPose3D VisualSlam::predictedPoseWc() const
@@ -1194,8 +1201,15 @@ bool VisualSlam::solveFramePose(
     }
   }
 
+  if (frame_dt_ < 0)
+  {
+    // Time went backward: the velocity stays reset (updateFrameTiming()).
+    return pose_updated;
+  }
+  // A dead-reckoned increment spans the capped extrapolation, not the gap.
+  const double dt = frame_dt_ > 0 ? frame_dt_ : frame_period_;
   last_motion_    = pose_wc_ - prev_wc;
-  last_motion_dt_ = frame_dt_ > 0 ? frame_dt_ : frame_period_;
+  last_motion_dt_ = pose_updated ? dt : std::min(dt, max_extrapolation_);
   have_motion_    = true;
   return pose_updated;
 }
