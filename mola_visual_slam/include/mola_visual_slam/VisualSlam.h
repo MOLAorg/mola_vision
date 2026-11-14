@@ -266,6 +266,8 @@ class VisualSlam : public mola::FrontEndBase,
   /** Longest frame interval the gyro is trusted to bridge [s]. Beyond it the
    *  prediction falls back to constant velocity. */
   double imu_max_gap_ = 0.5;
+  /** [s] Longest time the constant-velocity prediction extrapolates. */
+  double max_extrapolation_ = 1.5;
   /** @} */
   /** Farthest a stereo match may be back-projected into a new landmark [m].
    *  Stereo depth error grows as Z^2, so beyond some range a match is only a
@@ -358,7 +360,9 @@ class VisualSlam : public mola::FrontEndBase,
   mrpt::poses::CPose3D               pose_cw_;
   mrpt::poses::CPose3D               pose_wc_;
   mrpt::poses::CPose3D               last_motion_;  ///< previous frame-to-frame motion (T_wc)
-  bool                               have_motion_ = false;
+  bool                               have_motion_    = false;
+  double                             last_motion_dt_ = 0;  ///< [s] time spanned by last_motion_
+  double                             frame_dt_       = 0;  ///< [s] time since the previous frame
   std::vector<mrpt::math::TPoint3D>  trajectory_;
   mrpt::img::TCamera                 camera_;
   int                                frame_count_         = 0;

@@ -115,7 +115,7 @@ TEST(RgbdSlam, RecoversPureTranslation)
     mrpt::img::CImage        gray;
     mrpt::math::CMatrixFloat depth;
     renderFrame(tx, gray, depth);
-    last = slam.processFrame(gray, depth, cam, mrpt::Clock::now());
+    last = slam.processFrame(gray, depth, cam, mrpt::Clock::fromDouble(1.0 + k / 30.0));
   }
 
   // Map and keyframes were created.
@@ -146,7 +146,7 @@ TEST(RgbdSlam, FirstFrameInitializesMap)
   mrpt::img::CImage        gray;
   mrpt::math::CMatrixFloat depth;
   renderFrame(0.f, gray, depth);
-  const auto pose = slam.processFrame(gray, depth, cam, mrpt::Clock::now());
+  const auto pose = slam.processFrame(gray, depth, cam, mrpt::Clock::fromDouble(1.0));
 
   // First frame defines the world frame at the origin.
   EXPECT_NEAR(pose.x(), 0.0, 1e-6);
@@ -175,7 +175,7 @@ TEST(RgbdSlam, RecoversRotationAndTranslation)
     mrpt::img::CImage        gray;
     mrpt::math::CMatrixFloat depth;
     renderPose(gt, gray, depth);
-    last = slam.processFrame(gray, depth, cam, mrpt::Clock::now());
+    last = slam.processFrame(gray, depth, cam, mrpt::Clock::fromDouble(1.0 + k / 30.0));
   }
 
   // Recover the final camera-in-world pose (translation < 3 cm, yaw < 0.5 deg).

@@ -116,7 +116,7 @@ TEST(VisualSlam, MonoBootstrapAndTrack)
   {
     const mrpt::poses::CPose3D gt(static_cast<double>(k) * step, 0, 0, 0, 0, 0);
     const auto                 img = renderView(gt, cloud);
-    last                           = slam.processFrame(img, cam, mrpt::Clock::now());
+    last = slam.processFrame(img, cam, mrpt::Clock::fromDouble(1.0 + k / 30.0));
   }
 
   // The module should have bootstrapped and built a map.
@@ -176,7 +176,8 @@ TEST(VisualSlam, StereoRecoversMetricScale)
     const mrpt::poses::CPose3D gt_right = gt + mrpt::poses::CPose3D(baseline, 0, 0, 0, 0, 0);
     const auto                 left     = renderView(gt, cloud);
     const auto                 right    = renderView(gt_right, cloud);
-    last = slam.processStereoFrame(left, right, cam, baseline, mrpt::Clock::now());
+    last                                = slam.processStereoFrame(
+                                       left, right, cam, baseline, mrpt::Clock::fromDouble(1.0 + k / 30.0));
   }
 
   EXPECT_TRUE(slam.isInitialized());
@@ -207,7 +208,7 @@ TEST(VisualSlam, StaysUninitializedWithoutParallax)
   for (int k = 0; k < 8; ++k)
   {
     const auto img = renderView(mrpt::poses::CPose3D::Identity(), cloud);
-    slam.processFrame(img, cam, mrpt::Clock::now());
+    slam.processFrame(img, cam, mrpt::Clock::fromDouble(1.0 + k / 30.0));
   }
   EXPECT_FALSE(slam.isInitialized());
 }

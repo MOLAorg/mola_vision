@@ -6,6 +6,7 @@
 #include <mola_libvision/feature_detection.h>
 #include <mola_libvision/geometry.h>
 #include <mola_libvision/keyframe_selector.h>
+#include <mola_libvision/motion_model.h>
 #include <mola_libvision/optical_flow.h>
 #include <mola_libvision/pnp_solver.h>
 #include <mola_libvision/rgbd_depth.h>
@@ -259,6 +260,7 @@ void VisualSlam::initialize_frontend(const Yaml& c)
     getS("imu_label", imu_label_);
     getS("imu_pose_on_robot", imu_pose_on_robot_str_);
     getD("imu_max_gap", imu_max_gap_);
+    getD("max_extrapolation", max_extrapolation_);
     getB("left_image_rotate_180", left_image_rotate_180_);
     getB("right_image_rotate_180", right_image_rotate_180_);
     getS("rectify_output_size", rectify_output_size_str_);
@@ -829,6 +831,7 @@ mrpt::poses::CPose3D VisualSlam::processFrame(
   {
     gyro_delta_rot_.reset();
   }
+  frame_dt_      = last_frame_ts_ ? frame_ts - *last_frame_ts_ : 0.0;
   last_frame_ts_ = frame_ts;
 
   if (prev_gray_.isEmpty())
@@ -1061,17 +1064,31 @@ mrpt::poses::CPose3D VisualSlam::predictedPoseWc() const
   // Constant-velocity prediction: the previous frame-to-frame motion is a far
   // better starting point than "the camera did not move", both for LK and for
   // PnP, and it is the only sane fallback when localization fails outright.
+  if (!have_motion_)
+  {
+    return pose_wc_;
+  }
+  // The last increment spans last_motion_dt_ seconds; this frame comes
+  // frame_dt_ later, much more if frames were missed: scale it in time.
+  mrpt::poses::CPose3D motion = last_motion_;
+  if (last_motion_dt_ > 0 && frame_dt_ > 0)
+  {
+    const double s = std::min(frame_dt_, max_extrapolation_) / last_motion_dt_;
+    if (std::abs(s - 1.0) > 1e-3)
+    {
+      motion = mola::vision::scalePoseIncrement(last_motion_, s);
+    }
+  }
   if (!gyro_delta_rot_)
   {
-    return have_motion_ ? (pose_wc_ + last_motion_) : pose_wc_;
+    return pose_wc_ + motion;
   }
   // With a gyro, the rotation is measured rather than extrapolated. That is the
   // half of the increment a constant-velocity model gets badly wrong under
   // angular acceleration, and the half the LK seed is most sensitive to (a
   // rotation moves every pixel in the image, a small translation barely moves
   // the distant ones).
-  const auto translation =
-      have_motion_ ? last_motion_.translation() : mrpt::math::TPoint3D(0, 0, 0);
+  const auto                        translation = motion.translation();
   mrpt::math::CVectorFixedDouble<3> t;
   t[0] = translation.x;
   t[1] = translation.y;
@@ -1162,8 +1179,9 @@ bool VisualSlam::solveFramePose(
     }
   }
 
-  last_motion_ = pose_wc_ - prev_wc;
-  have_motion_ = true;
+  last_motion_    = pose_wc_ - prev_wc;
+  last_motion_dt_ = frame_dt_;
+  have_motion_    = true;
   return pose_updated;
 }
 
@@ -1415,6 +1433,7 @@ mrpt::poses::CPose3D VisualSlam::processStereoFrame(
   {
     gyro_delta_rot_.reset();
   }
+  frame_dt_      = last_frame_ts_ ? frame_ts - *last_frame_ts_ : 0.0;
   last_frame_ts_ = frame_ts;
 
   mola::vision::GridDistributorParams gp;

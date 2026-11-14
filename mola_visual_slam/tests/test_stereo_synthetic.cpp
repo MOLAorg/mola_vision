@@ -289,6 +289,7 @@ mrpt::poses::CPose3D runTrajectory(
 {
   const auto           cam = makeCamera();
   mrpt::poses::CPose3D last;
+  int                  k = 0;
   for (const auto& pose_wc : traj)
   {
     // The right camera sits +baseline along the left camera's own x axis
@@ -296,7 +297,7 @@ mrpt::poses::CPose3D runTrajectory(
     const mrpt::poses::CPose3D right_wc = pose_wc + mrpt::poses::CPose3D(baseline, 0, 0, 0, 0, 0);
     const auto                 L        = room.render(pose_wc, cam);
     const auto                 R        = room.render(right_wc, cam);
-    last = slam.processStereoFrame(L, R, cam, baseline, mrpt::Clock::now());
+    last = slam.processStereoFrame(L, R, cam, baseline, mrpt::Clock::fromDouble(1.0 + k++ / 30.0));
   }
   return last;
 }

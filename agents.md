@@ -13,7 +13,12 @@ Packages:
   intensity camera: depth not registered to it (different intrinsics or a
   non-identity `relativePoseIntensityWRTDepth`) is reprojected with
   `registerDepthToCamera()`, lazily, since depth is only read when landmarks
-  are created. Poses and map are in the vehicle frame ("map" = vehicle at the
+  are created. Tracking is seeded by `mola::vision::ConstantVelocityModel`
+  (motion_model.h): a twist per second over `velocity_window`, extrapolated
+  by the real time between frames (<= `max_extrapolation`), so stream gaps
+  are bridged by the expected motion; a failed frame retries "no motion" and
+  dead-reckons only right after a gap (in-stream failures, e.g. blur, hold
+  the pose). Poses and map are in the vehicle frame ("map" = vehicle at the
   first frame) using `sensorPose + relativePoseIntensityWRTDepth`, or the
   `camera_pose_on_robot` parameter; `estimated_trajectory_file` saves a TUM
   file on quit. `rgbd_slam_from_rosbag2.yaml` reads ROS 2 bags through
@@ -61,6 +66,9 @@ Packages:
   prints the stereo epipolar residual binned by image radius, which checks
   rectification quality without any ground truth: on a correct rectification it
   is flat.
+  The constant-velocity increment is scaled by the time between frames
+  (`max_extrapolation`), so tests and inputs must carry capture timestamps,
+  never the wall clock.
   `imu_label` turns on gyro-aided prediction: the inter-frame rotation comes
   from a `CObservationIMU` stream instead of the constant-velocity model
   (translation still constant-velocity), which is what keeps tracking alive

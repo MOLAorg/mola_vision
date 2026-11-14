@@ -84,6 +84,30 @@ std::vector<Eigen::Vector3d> readGtPositions(const std::string& path)
 }
 }  // namespace
 
+namespace
+{
+// Capture time of each frame (times.txt), or the nominal 10 Hz period if
+// missing. The constant-velocity motion model scales by the time between frames,
+// so the processing time (wall clock) must not stand in for it.
+std::vector<double> loadKittiTimes(const std::string& seqDir)
+{
+  std::vector<double> times;
+  std::ifstream       f(seqDir + "/times.txt");
+  double              t = 0;
+  while (f >> t)
+  {
+    times.push_back(t);
+  }
+  return times;
+}
+
+mrpt::Clock::time_point kittiStamp(const std::vector<double>& times, size_t i)
+{
+  return mrpt::Clock::fromDouble(
+      1.0 + (i < times.size() ? times[i] : 0.1 * static_cast<double>(i)));
+}
+}  // namespace
+
 TEST(VisualSlamKITTI, StereoAteSeq00)
 {
   const char* envDir = std::getenv("KITTI_STEREO_DIR");
@@ -134,8 +158,25 @@ TEST(VisualSlamKITTI, StereoAteSeq00)
     dump.open(dp);
   }
 
+  const auto times = loadKittiTimes(dir);
+  // Optional gaps in the stream, to exercise the motion model: drop
+  // KITTI_DROP_LEN consecutive frames every KITTI_DROP_EVERY frames.
+  size_t dropEvery = 0;
+  size_t dropLen   = 0;
+  if (const char* e = std::getenv("KITTI_DROP_EVERY"))
+  {
+    dropEvery = static_cast<size_t>(std::atol(e));
+  }
+  if (const char* e = std::getenv("KITTI_DROP_LEN"))
+  {
+    dropLen = static_cast<size_t>(std::atol(e));
+  }
   for (size_t i = 0; i < max_frames; ++i)
   {
+    if (dropEvery > 0 && i > dropLen && (i % dropEvery) < dropLen)
+    {
+      continue;
+    }
     const std::string lp = dir + "/image_0/" + frameName(static_cast<int>(i));
     const std::string rp = dir + "/image_1/" + frameName(static_cast<int>(i));
     if (!mrpt::system::fileExists(lp))
@@ -153,7 +194,7 @@ TEST(VisualSlamKITTI, StereoAteSeq00)
       cam.setIntrinsicParamsFromValues(fx, fy, cx, cy);
       camReady = true;
     }
-    const auto pose = slam.processStereoFrame(left, right, cam, baseline, mrpt::Clock::now());
+    const auto pose = slam.processStereoFrame(left, right, cam, baseline, kittiStamp(times, i));
     if (slam.isInitialized())
     {
       est.emplace_back(pose.x(), pose.y(), pose.z());

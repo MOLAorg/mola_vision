@@ -72,6 +72,11 @@ modules:
       kf_min_tracked: 80
       kf_min_tracked_ratio: 0.6
       kf_min_parallax_px: 18.0
+      # Constant-velocity motion model: past poses over velocity_window [s]
+      # estimate the velocity, extrapolated by the time between frames (up to
+      # max_extrapolation [s]) to seed tracking and bridge missing frames.
+      velocity_window: ${RGBD_VELOCITY_WINDOW|0.3}
+      max_extrapolation: ${RGBD_MAX_EXTRAPOLATION|1.5}
       estimated_trajectory_file: ${RGBD_TRAJECTORY_FILE|''}
       # Camera optical frame on the vehicle; empty: from the observations (/tf):
       camera_pose_on_robot: ${RGBD_CAMERA_POSE_ON_ROBOT|''}
