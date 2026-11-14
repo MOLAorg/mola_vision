@@ -82,10 +82,7 @@ std::vector<Eigen::Vector3d> readGtPositions(const std::string& path)
   }
   return out;
 }
-}  // namespace
 
-namespace
-{
 // Capture time of each frame (times.txt), or the nominal 10 Hz period if
 // missing. The constant-velocity motion model scales by the time between frames,
 // so the processing time (wall clock) must not stand in for it.
@@ -171,6 +168,8 @@ TEST(VisualSlamKITTI, StereoAteSeq00)
   {
     dropLen = static_cast<size_t>(std::atol(e));
   }
+  ASSERT_TRUE(dropEvery == 0 || dropLen < dropEvery)
+      << "KITTI_DROP_LEN must be below KITTI_DROP_EVERY";
   for (size_t i = 0; i < max_frames; ++i)
   {
     if (dropEvery > 0 && i > dropLen && (i % dropEvery) < dropLen)

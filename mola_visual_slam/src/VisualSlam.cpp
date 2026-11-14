@@ -831,8 +831,7 @@ mrpt::poses::CPose3D VisualSlam::processFrame(
   {
     gyro_delta_rot_.reset();
   }
-  frame_dt_      = last_frame_ts_ ? frame_ts - *last_frame_ts_ : 0.0;
-  last_frame_ts_ = frame_ts;
+  updateFrameTiming(frame_ts);
 
   if (prev_gray_.isEmpty())
   {
@@ -1059,24 +1058,40 @@ bool VisualSlam::tryInitialize(const mrpt::img::CImage& gray)
   return true;
 }
 
+void VisualSlam::updateFrameTiming(double frame_ts)
+{
+  frame_dt_ = last_frame_ts_ ? frame_ts - *last_frame_ts_ : 0.0;
+  if (frame_dt_ > 0)
+  {
+    // Clamped samples: a gap does not inflate the period, a lasting lower
+    // frame rate is still followed within a few frames.
+    const double sample = frame_period_ > 0 ? std::min(frame_dt_, 2.5 * frame_period_) : frame_dt_;
+    frame_period_       = frame_period_ > 0 ? 0.9 * frame_period_ + 0.1 * sample : sample;
+  }
+  if (!last_frame_ts_ || frame_ts > *last_frame_ts_)
+  {
+    last_frame_ts_ = frame_ts;
+  }
+}
+
 mrpt::poses::CPose3D VisualSlam::predictedPoseWc() const
 {
   // Constant-velocity prediction: the previous frame-to-frame motion is a far
   // better starting point than "the camera did not move", both for LK and for
   // PnP, and it is the only sane fallback when localization fails outright.
-  if (!have_motion_)
+  mrpt::poses::CPose3D motion = mrpt::poses::CPose3D::Identity();
+  if (have_motion_)
   {
-    return pose_wc_;
-  }
-  // The last increment spans last_motion_dt_ seconds; this frame comes
-  // frame_dt_ later, much more if frames were missed: scale it in time.
-  mrpt::poses::CPose3D motion = last_motion_;
-  if (last_motion_dt_ > 0 && frame_dt_ > 0)
-  {
-    const double s = std::min(frame_dt_, max_extrapolation_) / last_motion_dt_;
-    if (std::abs(s - 1.0) > 1e-3)
+    // The last increment spans last_motion_dt_ seconds; this frame comes
+    // frame_dt_ later, much more if frames were missed: scale it in time. The
+    // smoothed period bounds the scale under timestamp jitter.
+    motion                = last_motion_;
+    const double span     = std::max(last_motion_dt_, 0.5 * frame_period_);
+    const double frame_dt = frame_dt_ > 0 ? frame_dt_ : frame_period_;
+    if (span > 0 && frame_dt > 0)
     {
-      motion = mola::vision::scalePoseIncrement(last_motion_, s);
+      motion = mola::vision::scalePoseIncrement(
+          last_motion_, std::min(frame_dt, max_extrapolation_) / span);
     }
   }
   if (!gyro_delta_rot_)
@@ -1180,7 +1195,7 @@ bool VisualSlam::solveFramePose(
   }
 
   last_motion_    = pose_wc_ - prev_wc;
-  last_motion_dt_ = frame_dt_;
+  last_motion_dt_ = frame_dt_ > 0 ? frame_dt_ : frame_period_;
   have_motion_    = true;
   return pose_updated;
 }
@@ -1433,8 +1448,7 @@ mrpt::poses::CPose3D VisualSlam::processStereoFrame(
   {
     gyro_delta_rot_.reset();
   }
-  frame_dt_      = last_frame_ts_ ? frame_ts - *last_frame_ts_ : 0.0;
-  last_frame_ts_ = frame_ts;
+  updateFrameTiming(frame_ts);
 
   mola::vision::GridDistributorParams gp;
   gp.max_corners  = max_features_;
