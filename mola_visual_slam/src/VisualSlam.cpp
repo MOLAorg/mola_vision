@@ -1962,12 +1962,13 @@ void VisualSlam::publishViz3D()
   {
     auto fr = mrpt::viz::CFrustum::Create();
     fr->setColor_u8(mrpt::img::TColor(120, 120, 120, 180));
-    fr->setPose(-kf.pose_cw);
+    // CFrustum points along +X, cameras along their optical +Z:
+    fr->setPose((-kf.pose_cw) + (-mola::vision::opticalFrameInXForwardFrame()));
     scene->insert(fr);
   }
   auto cur = mrpt::viz::CFrustum::Create();
   cur->setColor_u8(mrpt::img::TColor(40, 200, 40));
-  cur->setPose(pose_wc_);
+  cur->setPose(pose_wc_ + (-mola::vision::opticalFrameInXForwardFrame()));
   scene->insert(cur);
 
   visualizer_->update_3d_object("visual_slam", scene);
