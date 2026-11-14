@@ -133,3 +133,92 @@ TEST(RGBD, Decimation)
   // step=4 over 64 -> 16x16 = 256 points.
   EXPECT_EQ(static_cast<int>(dec.points.size()), 16 * 16);
 }
+
+// ---------------------------------------------------------------------------
+// Depth registration into another camera.
+// ---------------------------------------------------------------------------
+namespace
+{
+mrpt::math::CMatrix_u16 flatDepth(int w, int h, uint16_t mm)
+{
+  mrpt::math::CMatrix_u16 d(h, w);
+  d.asEigen().setConstant(mm);
+  return d;
+}
+}  // namespace
+
+TEST(RGBD, RegisterDepthIdentity)
+{
+  const auto cam = makeCamera(64, 48);
+  auto       raw = flatDepth(64, 48, 1500);
+  raw(10, 20)    = 0;  // a hole stays a hole
+
+  const auto out = registerDepthToCamera(raw, 1e-3f, cam, cam, mrpt::poses::CPose3D::Identity());
+  ASSERT_EQ(out.rows(), 48);
+  ASSERT_EQ(out.cols(), 64);
+  EXPECT_NEAR(out(30, 40), 1.5f, 1e-5f);
+  EXPECT_EQ(out(10, 20), 0.f);
+}
+
+TEST(RGBD, RegisterDepthBaselineShift)
+{
+  // A fronto-parallel plane at 2 m, seen by a target camera 0.1 m to the right
+  // of the depth camera: it appears fx * 0.1 / 2 = 25 px to the left.
+  const auto                 cam = makeCamera(640, 480);
+  const auto                 raw = flatDepth(640, 480, 2000);
+  const mrpt::poses::CPose3D targetFromDepth(-0.1, 0, 0, 0, 0, 0);
+
+  const auto out = registerDepthToCamera(raw, 1e-3f, cam, cam, targetFromDepth);
+  EXPECT_NEAR(out(240, 320), 2.0f, 1e-4f);
+  // The right-most 25 columns are not seen by the depth camera:
+  EXPECT_EQ(out(240, 630), 0.f);
+  EXPECT_NEAR(out(240, 610), 2.0f, 1e-4f);
+}
+
+TEST(RGBD, RegisterDepthNoHolesWhenUpsampling)
+{
+  // Target camera with twice the focal length: splatting must avoid holes.
+  const auto depthCam  = makeCamera(320, 240);
+  auto       targetCam = makeCamera(320, 240);
+  targetCam.setIntrinsicParamsFromValues(1000.0, 1000.0, 160.0, 120.0);
+  const auto raw = flatDepth(320, 240, 1000);
+
+  const auto out =
+      registerDepthToCamera(raw, 1e-3f, depthCam, targetCam, mrpt::poses::CPose3D::Identity());
+  for (int r = 10; r < 230; ++r)
+  {
+    for (int c = 10; c < 310; ++c)
+    {
+      ASSERT_NEAR(out(r, c), 1.0f, 1e-4f) << "r=" << r << " c=" << c;
+    }
+  }
+}
+
+TEST(RGBD, RegisterDepthZBuffer)
+{
+  // A near object occludes the far background where both project.
+  const auto cam = makeCamera(64, 48);
+  auto       raw = flatDepth(64, 48, 3000);
+  for (int r = 20; r < 28; ++r)
+  {
+    for (int c = 28; c < 36; ++c)
+    {
+      raw(r, c) = 500;
+    }
+  }
+  const auto out = registerDepthToCamera(raw, 1e-3f, cam, cam, mrpt::poses::CPose3D::Identity());
+  EXPECT_NEAR(out(24, 32), 0.5f, 1e-5f);
+  EXPECT_NEAR(out(5, 5), 3.0f, 1e-5f);
+}
+
+TEST(RGBD, OpticalFrameConvention)
+{
+  // The optical +Z axis is the +X axis of the "X forward" frame:
+  const auto p = opticalFrameInXForwardFrame().composePoint({0, 0, 1});
+  EXPECT_NEAR(p.x, 1.0, 1e-9);
+  EXPECT_NEAR(p.y, 0.0, 1e-9);
+  EXPECT_NEAR(p.z, 0.0, 1e-9);
+  // Optical +X (right) is -Y (left) in the "X forward" frame:
+  const auto q = opticalFrameInXForwardFrame().composePoint({1, 0, 0});
+  EXPECT_NEAR(q.y, -1.0, 1e-9);
+}
