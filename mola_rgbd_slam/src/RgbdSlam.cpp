@@ -11,6 +11,7 @@
 #include <mola_libvision/sliding_window_ba.h>
 #include <mola_rgbd_slam/RgbdSlam.h>
 #include <mrpt/containers/yaml.h>
+#include <mrpt/core/lock_helper.h>
 #include <mrpt/img/TColor.h>
 #include <mrpt/maps/CSimplePointsMap.h>
 #include <mrpt/obs/CObservation3DRangeScan.h>
@@ -43,6 +44,18 @@ float depthAt(const mrpt::math::CMatrixFloat& depth_m, const mrpt::math::TPoint2
     return -1.f;
   }
   return depth_m(r, c);
+}
+
+bool sameIntrinsics(const mrpt::img::TCamera& a, const mrpt::img::TCamera& b)
+{
+  return (a.intrinsicParams.asEigen() - b.intrinsicParams.asEigen()).cwiseAbs().maxCoeff() < 1e-6;
+}
+
+/** True if the depth image is already registered to the intensity camera. */
+bool depthIsRegistered(const mrpt::obs::CObservation3DRangeScan& obs)
+{
+  return obs.doDepthAndIntensityCamerasCoincide() &&
+         sameIntrinsics(obs.cameraParams, obs.cameraParamsIntensity);
 }
 }  // namespace
 
@@ -102,6 +115,19 @@ void RgbdSlam::initialize_frontend(const Yaml& c)
     {
       publish_viz_3d_ = cfg["publish_viz_3d"].as<bool>();
     }
+    if (cfg.has("estimated_trajectory_file"))
+    {
+      estimated_trajectory_file_ = cfg["estimated_trajectory_file"].as<std::string>();
+    }
+    if (cfg.has("camera_pose_on_robot"))
+    {
+      camera_pose_on_robot_str_ = cfg["camera_pose_on_robot"].as<std::string>();
+    }
+  }
+
+  if (!camera_pose_on_robot_str_.empty())
+  {
+    camera_pose_on_robot_ = mrpt::poses::CPose3D::FromString("[" + camera_pose_on_robot_str_ + "]");
   }
 
   MRPT_LOG_INFO_STREAM(
@@ -139,35 +165,75 @@ void RgbdSlam::onNewObservation(const CObservation::ConstPtr& o)
     return;
   }
 
-  // Metric depth map (meters). rangeImage stores raw values scaled by
-  // rangeUnits; we only support range_is_depth (registered depth).
-  mrpt::math::CMatrixFloat depth_m;
-  depth_m = obs->rangeImage.asEigen().cast<float>() * obs->rangeUnits;
+  if (!obs->hasIntensityImage || obs->intensityImage.isEmpty())
+  {
+    return;  // no texture to track
+  }
   if (!obs->range_is_depth)
   {
     MRPT_LOG_WARN_STREAM("Observation has range_is_depth=false; treating ranges as depths.");
   }
 
-  // Grayscale image: use the registered intensity image if present, else a
-  // flat gray (so tracking degrades gracefully rather than crashing).
-  mrpt::img::CImage gray;
-  if (obs->hasIntensityImage && !obs->intensityImage.isEmpty())
+  // The intensity camera is the tracked one. Observations without intensity
+  // intrinsics are assumed to carry depth already registered to the image.
+  const bool         hasIntensityCalib = obs->cameraParamsIntensity.fx() > 0;
+  mrpt::img::TCamera cam = hasIntensityCalib ? obs->cameraParamsIntensity : obs->cameraParams;
+  // The image size wins over the declared one, which some datasets get wrong:
+  cam.ncols = static_cast<uint32_t>(obs->intensityImage.getWidth());
+  cam.nrows = static_cast<uint32_t>(obs->intensityImage.getHeight());
+
+  // Metric depth map (meters) in the intensity camera. It is only needed to
+  // create landmarks, which happens in few frames, so build it on demand:
+  std::optional<mrpt::math::CMatrixFloat> depth_m;
+  const auto                              depthProvider = [&]() -> const mrpt::math::CMatrixFloat&
   {
-    gray = obs->intensityImage.grayscale();
-  }
-  else
+    if (depth_m)
+    {
+      return *depth_m;
+    }
+    if (!hasIntensityCalib || depthIsRegistered(*obs))
+    {
+      depth_m = obs->rangeImage.asEigen().cast<float>() * obs->rangeUnits;
+      return *depth_m;
+    }
+    mrpt::system::CTimeLoggerEntry tle(profiler_, "registerDepth");
+    // Points from the depth optical frame into the intensity optical frame:
+    const auto intensityFromDepth =
+        (-obs->relativePoseIntensityWRTDepth) + mola::vision::opticalFrameInXForwardFrame();
+    depth_m = mola::vision::registerDepthToCamera(
+        obs->rangeImage, obs->rangeUnits, obs->cameraParams, cam, intensityFromDepth);
+    return *depth_m;
+  };
+
+  // An identity sensorPose means "unknown", as in VisualSlam: poses are then
+  // reported for the camera itself.
+  if (!camera_pose_on_robot_ && obs->sensorPose.asVectorVal().norm() > 1e-9)
   {
-    return;  // no texture to track
+    // Pose of the tracked camera's optical frame on the robot:
+    camera_pose_on_robot_ =
+        obs->sensorPose + (hasIntensityCalib ? obs->relativePoseIntensityWRTDepth
+                                             : mola::vision::opticalFrameInXForwardFrame());
+    MRPT_LOG_INFO_STREAM(
+        "Camera-on-robot extrinsic taken from the observations: " << *camera_pose_on_robot_);
   }
 
-  processFrame(gray, depth_m, obs->cameraParams, obs->timestamp);
+  const mrpt::img::CImage gray = obs->intensityImage.grayscale();
+  processFrame(gray, depthProvider, cam, obs->timestamp);
 
   MRPT_END
 }
 
 mrpt::poses::CPose3D RgbdSlam::processFrame(
-    const mrpt::img::CImage& gray_in, const mrpt::math::CMatrixFloat& depth_m,
+    const mrpt::img::CImage& gray, const mrpt::math::CMatrixFloat& depth_m,
     const mrpt::img::TCamera& cam, const mrpt::Clock::time_point& timestamp)
+{
+  return processFrame(
+      gray, [&]() -> const mrpt::math::CMatrixFloat& { return depth_m; }, cam, timestamp);
+}
+
+mrpt::poses::CPose3D RgbdSlam::processFrame(
+    const mrpt::img::CImage& gray_in, const DepthProvider& depth, const mrpt::img::TCamera& cam,
+    const mrpt::Clock::time_point& timestamp)
 {
   using mrpt::math::TPoint2Df;
   using mrpt::math::TPoint3Df;
@@ -201,7 +267,7 @@ mrpt::poses::CPose3D RgbdSlam::processFrame(
     track_lm_.clear();
     for (const auto& p : fresh)
     {
-      const float d = depthAt(depth_m, p);
+      const float d = depthAt(depth(), p);
       const auto  X = mola::vision::backprojectPixel(p, d, cam, depthParams);
       if (!X)
       {
@@ -221,6 +287,7 @@ mrpt::poses::CPose3D RgbdSlam::processFrame(
     frame_count_     = 1;
     frames_since_kf_ = 0;
     trajectory_.push_back(pose_wc_.translation());
+    recordPose(timestamp);
     publishLocalization(timestamp);
     publishMap(timestamp);
     publishViz2D(gray, true);
@@ -338,7 +405,7 @@ mrpt::poses::CPose3D RgbdSlam::processFrame(
       {
         break;
       }
-      const float d  = depthAt(depth_m, p);
+      const float d  = depthAt(depth(), p);
       const auto  Xc = mola::vision::backprojectPixel(p, d, cam, depthParams);
       if (!Xc)
       {
@@ -398,6 +465,7 @@ mrpt::poses::CPose3D RgbdSlam::processFrame(
 
   prev_gray_ = gray;
   trajectory_.push_back(pose_wc_.translation());
+  recordPose(timestamp);
   publishLocalization(timestamp);
   {
     mrpt::system::CTimeLoggerEntry tlv(profiler_, "viz");
@@ -505,9 +573,50 @@ void RgbdSlam::publishLocalization(const mrpt::Clock::time_point& timestamp)
   lu.timestamp       = timestamp;
   lu.method          = "rgbd_slam";
   lu.reference_frame = "map";
-  lu.child_frame     = "base_link";
-  lu.pose            = pose_wc_.asTPose();
+  // Only claim "base_link" when the camera-on-robot extrinsic is known:
+  lu.child_frame = camera_pose_on_robot_ ? "base_link" : "camera";
+  lu.pose        = currentRobotPose().asTPose();
   advertiseUpdatedLocalization(lu);
+}
+
+void RgbdSlam::recordPose(const mrpt::Clock::time_point& timestamp)
+{
+  if (!estimated_trajectory_file_.empty())
+  {
+    auto lck = mrpt::lockHelper(estimated_trajectory_mtx_);
+    estimated_trajectory_.insert(timestamp, currentRobotPose());
+  }
+}
+
+void RgbdSlam::onQuit()
+{
+  if (estimated_trajectory_file_.empty())
+  {
+    return;
+  }
+  // Observations arrive in the data source's thread, while this runs in the
+  // module's own one:
+  mrpt::poses::CPose3DInterpolator traj;
+  {
+    auto lck = mrpt::lockHelper(estimated_trajectory_mtx_);
+    traj     = estimated_trajectory_;
+  }
+  MRPT_LOG_INFO_STREAM(
+      "Saving estimated trajectory (" << traj.size() << " poses) to '" << estimated_trajectory_file_
+                                      << "' in TUM format.");
+  if (!traj.saveToTextFile_TUM(estimated_trajectory_file_))
+  {
+    MRPT_LOG_ERROR_STREAM("Could not write '" << estimated_trajectory_file_ << "'");
+  }
+}
+
+mrpt::poses::CPose3D RgbdSlam::currentRobotPose() const
+{
+  if (!camera_pose_on_robot_)
+  {
+    return pose_wc_;
+  }
+  return *camera_pose_on_robot_ + pose_wc_ + (-*camera_pose_on_robot_);
 }
 
 void RgbdSlam::publishViz2D(const mrpt::img::CImage& gray, bool just_initialized)
@@ -612,15 +721,22 @@ void RgbdSlam::publishViz3D()
   {
     auto fr = mrpt::viz::CFrustum::Create();
     fr->setColor_u8(mrpt::img::TColor(120, 120, 120, 180));
-    fr->setPose(-kf.pose_cw);  // camera -> world
+    // CFrustum points along +X, cameras along their optical +Z:
+    fr->setPose((-kf.pose_cw) + (-mola::vision::opticalFrameInXForwardFrame()));
     scene->insert(fr);
   }
 
   // --- current camera frustum (green) ---
   auto cur = mrpt::viz::CFrustum::Create();
   cur->setColor_u8(mrpt::img::TColor(40, 200, 40));
-  cur->setPose(pose_wc_);
+  cur->setPose(pose_wc_ + (-mola::vision::opticalFrameInXForwardFrame()));
   scene->insert(cur);
+
+  // Show everything in the "map" frame (the vehicle at the first frame):
+  if (camera_pose_on_robot_)
+  {
+    scene->setPose(*camera_pose_on_robot_);
+  }
 
   visualizer_->update_3d_object("rgbd_slam", scene);
 }
@@ -631,6 +747,9 @@ void RgbdSlam::publishMap(const mrpt::Clock::time_point& timestamp)
   {
     return;
   }
+  // Landmarks live in the first camera frame; "map" is the first vehicle frame:
+  const auto mapFromWorld = camera_pose_on_robot_.value_or(mrpt::poses::CPose3D::Identity());
+
   auto cloud = mrpt::maps::CSimplePointsMap::Create();
   cloud->reserve(landmarks_.size());
   for (const auto& lm : landmarks_)
@@ -639,7 +758,8 @@ void RgbdSlam::publishMap(const mrpt::Clock::time_point& timestamp)
     {
       continue;
     }
-    cloud->insertPoint(lm.pos.x, lm.pos.y, lm.pos.z);
+    const auto p = mapFromWorld.composePoint(mrpt::math::TPoint3D(lm.pos));
+    cloud->insertPoint(static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z));
   }
 
   MapUpdate mu;
