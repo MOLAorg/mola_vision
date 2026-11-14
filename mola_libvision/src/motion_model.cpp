@@ -5,6 +5,7 @@
  * ------------------------------------------------------------------------- */
 #include <mola_libvision/lie_utils.h>
 #include <mola_libvision/motion_model.h>
+#include <mrpt/core/exceptions.h>
 
 #include <Eigen/Geometry>
 #include <algorithm>
@@ -61,6 +62,13 @@ mrpt::poses::CPose3D mola::vision::scalePoseIncrement(const mrpt::poses::CPose3D
     x[i] *= s;
   }
   return se3Exp(x);
+}
+
+void ConstantVelocityModel::setParameters(const Parameters& p)
+{
+  ASSERT_GE_(p.velocity_window, 0.0);
+  ASSERT_GE_(p.max_extrapolation, 0.0);
+  params_ = p;
 }
 
 void ConstantVelocityModel::addPose(double t, const mrpt::poses::CPose3D& pose)

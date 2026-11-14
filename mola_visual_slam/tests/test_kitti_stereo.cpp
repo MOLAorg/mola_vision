@@ -223,7 +223,9 @@ TEST(VisualSlamKITTI, StereoAteSeq00)
   ASSERT_GE(est.size(), 50u);
 
   const auto gt = readGtPositions(envPos);
-  ASSERT_GE(gt.size(), est.size());
+  ASSERT_FALSE(est_frame.empty());
+  // With dropped frames the estimates are fewer than the frame indices:
+  ASSERT_GT(gt.size(), static_cast<size_t>(est_frame.back()));
 
   // Associate by frame index, then SE3 (rigid, NO scaling) align - stereo is
   // already metric.
