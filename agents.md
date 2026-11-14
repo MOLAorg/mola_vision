@@ -9,7 +9,15 @@ Packages:
 - `mola_visual_tracking` — demo MOLA module exercising the library.
 - `mola_rgbd_slam` — RGB-D visual SLAM front-end (`mola::RgbdSlam`):
   detect + LK-track features, depth back-projection, robust PnP tracking, and
-  sliding-window BA over keyframes; publishes pose + sparse map.
+  sliding-window BA over keyframes; publishes pose + sparse map. It tracks the
+  intensity camera: depth not registered to it (different intrinsics or a
+  non-identity `relativePoseIntensityWRTDepth`) is reprojected with
+  `registerDepthToCamera()`, lazily, since depth is only read when landmarks
+  are created. Poses and map are in the vehicle frame ("map" = vehicle at the
+  first frame) using `sensorPose + relativePoseIntensityWRTDepth`, or the
+  `camera_pose_on_robot` parameter; `estimated_trajectory_file` saves a TUM
+  file on quit. `rgbd_slam_from_rosbag2.yaml` reads ROS 2 bags through
+  `mola::Rosbag2Dataset` RGB-D sensors.
 - `mola_visual_slam` — monocular/stereo visual SLAM front-end
   (`mola::VisualSlam`). `mode=mono`: essential-matrix bootstrap, PnP tracking,
   cross-keyframe triangulation, windowed BA (up-to-scale). `mode=stereo`: pairs
