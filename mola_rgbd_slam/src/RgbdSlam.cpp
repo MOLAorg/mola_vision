@@ -5,6 +5,7 @@
  * ------------------------------------------------------------------------- */
 #include <mola_libvision/feature_detection.h>
 #include <mola_libvision/keyframe_selector.h>
+#include <mola_libvision/motion_model.h>
 #include <mola_libvision/optical_flow.h>
 #include <mola_libvision/pnp_solver.h>
 #include <mola_libvision/rgbd_depth.h>
@@ -92,6 +93,8 @@ void RgbdSlam::initialize_frontend(const Yaml& c)
     getI("min_pnp_points", min_pnp_points_);
     getF("min_depth", min_depth_);
     getF("max_depth", max_depth_);
+    getF("velocity_window", velocity_window_);
+    getF("max_extrapolation", max_extrapolation_);
     getI("ba_window_size", ba_window_size_);
     getI("cull_min_obs", cull_min_obs_);
     getI("kf_max_frames_gap", kf_max_frames_gap_);
@@ -124,6 +127,11 @@ void RgbdSlam::initialize_frontend(const Yaml& c)
       camera_pose_on_robot_str_ = cfg["camera_pose_on_robot"].as<std::string>();
     }
   }
+
+  mola::vision::ConstantVelocityModel::Parameters mp;
+  mp.velocity_window   = velocity_window_;
+  mp.max_extrapolation = max_extrapolation_;
+  motion_.setParameters(mp);
 
   if (!camera_pose_on_robot_str_.empty())
   {
@@ -256,6 +264,10 @@ mrpt::poses::CPose3D RgbdSlam::processFrame(
   {
     pose_cw_ = mrpt::poses::CPose3D::Identity();
     pose_wc_ = mrpt::poses::CPose3D::Identity();
+    motion_.reset();
+    motion_.addPose(mrpt::Clock::toDouble(timestamp), pose_wc_);
+    last_frame_time_ = mrpt::Clock::toDouble(timestamp);
+    frame_period_    = 0;
 
     mola::vision::GridDistributorParams gp;
     gp.max_corners  = max_features_;
@@ -296,69 +308,74 @@ mrpt::poses::CPose3D RgbdSlam::processFrame(
   }
 
   // -----------------------------------------------------------------------
-  // Track features into the new frame with pyramidal LK.
+  // Track features into the new frame (LK) and localize it (robust PnP).
+  // Both are seeded with the constant-velocity prediction over the real time
+  // since the last localized frame, so missing frames are bridged by the
+  // expected motion. If that fails, the vehicle may have stopped meanwhile:
+  // retry assuming no motion. If both fail right after a gap in the frame
+  // stream, the predicted pose is used (dead reckoning).
   // -----------------------------------------------------------------------
-  std::vector<TPoint2Df>                 next_pts;
-  std::vector<mola::vision::TrackStatus> status;
-  mola::vision::LKParams                 lk;
-  lk.win_size   = lk_win_size_;
-  lk.max_levels = lk_max_levels_;
-  profiler_.enter("track.LK");
-  mola::vision::calcOpticalFlowPyrLK(prev_gray_, gray, track_pts_, next_pts, status, lk);
-  profiler_.leave("track.LK");
-
-  // Gather 3D-2D correspondences with known landmarks for PnP.
-  std::vector<TPoint3Df> worldPts;
-  std::vector<TPoint2Df> pixels;
-  std::vector<size_t>    corr_track_idx;  // back-reference into track arrays
-  float                  parallax_sum = 0.f;
-  int                    parallax_n   = 0;
-  for (size_t i = 0; i < next_pts.size(); ++i)
+  const double t       = mrpt::Clock::toDouble(timestamp);
+  const double frameDt = t - last_frame_time_;
+  if (frameDt < 0)
   {
-    if (status[i] == mola::vision::TrackStatus::LOST)
-    {
-      continue;
-    }
-    parallax_sum += std::hypot(next_pts[i].x - track_pts_[i].x, next_pts[i].y - track_pts_[i].y);
-    ++parallax_n;
-
-    const int lm = track_lm_[i];
-    if (lm < 0 || landmarks_[lm].bad)
-    {
-      continue;
-    }
-    worldPts.push_back(landmarks_[lm].pos);
-    pixels.push_back(next_pts[i]);
-    corr_track_idx.push_back(i);
+    // Time went backward (e.g. a replayed dataset): restart the velocity.
+    MRPT_LOG_THROTTLE_WARN_STREAM(
+        2.0, "Frame timestamp " << -frameDt << " s older than the previous one; "
+                                << "resetting the motion model.");
+    motion_.reset();
+    motion_.addPose(t, pose_wc_);
+    last_frame_time_ = t;
   }
-
-  // -----------------------------------------------------------------------
-  // Robust PnP to recover the camera pose (init from previous frame).
-  // -----------------------------------------------------------------------
-  std::vector<bool> pnp_outlier(next_pts.size(), false);
-  if (static_cast<int>(worldPts.size()) >= min_pnp_points_)
+  const bool afterGap = frame_period_ > 0 && frameDt > 2.5 * frame_period_;
+  if (frameDt > 0)
   {
-    mrpt::system::CTimeLoggerEntry tlp(profiler_, "track.PnP");
-    mola::vision::PnPParams        pp;
-    const auto res = mola::vision::solvePnP(worldPts, pixels, cam, pose_cw_, pp);
-    if (res.converged)
+    // Clamped samples: a gap does not inflate the period, a lasting lower
+    // frame rate is still followed within a few frames.
+    const double sample = frame_period_ > 0 ? std::min(frameDt, 2.5 * frame_period_) : frameDt;
+    frame_period_       = frame_period_ > 0 ? 0.9 * frame_period_ + 0.1 * sample : sample;
+    last_frame_time_    = t;
+  }
+  const auto pred_wc   = motion_.hasVelocity() ? motion_.predict(t) : pose_wc_;
+  const bool predMoves = (pred_wc.asVectorVal() - pose_wc_.asVectorVal()).norm() > 1e-4;
+
+  TrackAttempt trk = trackFrame(gray, pred_wc, predMoves, cam);
+  if (!trk.localized && predMoves)
+  {
+    TrackAttempt still = trackFrame(gray, pose_wc_, false, cam);
+    if (still.localized || still.inliers > trk.inliers)
     {
-      pose_cw_ = res.pose;
-      pose_wc_ = -pose_cw_;  // inverse: camera -> world
+      trk = std::move(still);
     }
-    for (size_t k = 0; k < res.inliers.size(); ++k)
-    {
-      if (!res.inliers[k])
-      {
-        pnp_outlier[corr_track_idx[k]] = true;
-      }
-    }
+  }
+  if (trk.localized)
+  {
+    pose_cw_ = trk.pose_cw;
+    pose_wc_ = -pose_cw_;
+    motion_.addPose(t, pose_wc_);
+  }
+  else if (afterGap)
+  {
+    // Frames are missing, and the vehicle kept moving meanwhile:
+    pose_wc_ = pred_wc;
+    pose_cw_ = -pose_wc_;
+    MRPT_LOG_THROTTLE_WARN_STREAM(
+        2.0, "Frame after a " << frameDt << " s gap not localized (" << trk.inliers
+                              << " PnP inliers); dead-reckoning with the constant-velocity model.");
   }
   else
   {
-    MRPT_LOG_WARN_STREAM(
-        "Too few PnP correspondences (" << worldPts.size() << "); pose may drift.");
+    // A failure within a regular stream (e.g. motion blur): extrapolating
+    // would only run the pose away from the map, so it is held instead.
+    MRPT_LOG_THROTTLE_WARN_STREAM(
+        2.0, "Frame not localized (" << trk.inliers << " PnP inliers, need " << min_pnp_points_
+                                     << "); keeping the last pose.");
   }
+  const auto& next_pts     = trk.next_pts;
+  const auto& status       = trk.status;
+  const auto& pnp_outlier  = trk.outlier;
+  const float parallax_sum = trk.parallax_sum;
+  const int   parallax_n   = trk.parallax_n;
 
   // -----------------------------------------------------------------------
   // Compact the tracking arrays: drop lost and PnP-rejected features.
@@ -473,6 +490,98 @@ mrpt::poses::CPose3D RgbdSlam::processFrame(
     publishViz3D();
   }
   return pose_wc_;
+}
+
+RgbdSlam::TrackAttempt RgbdSlam::trackFrame(
+    const mrpt::img::CImage& gray, const mrpt::poses::CPose3D& seed_wc, bool projectSeed,
+    const mrpt::img::TCamera& cam)
+{
+  using mrpt::math::TPoint2Df;
+  using mrpt::math::TPoint3Df;
+
+  TrackAttempt a;
+  const auto   seed_cw = -seed_wc;
+
+  // LK initial guess: where each landmark projects from the seed pose, or the
+  // previous pixel for the "no motion" hypothesis.
+  a.next_pts     = track_pts_;
+  const float fx = static_cast<float>(cam.fx());
+  const float fy = static_cast<float>(cam.fy());
+  const float cx = static_cast<float>(cam.cx());
+  const float cy = static_cast<float>(cam.cy());
+  const float W  = static_cast<float>(gray.getWidth());
+  const float H  = static_cast<float>(gray.getHeight());
+  for (size_t i = 0; projectSeed && i < track_pts_.size(); ++i)
+  {
+    const int lm = track_lm_[i];
+    if (lm < 0)
+    {
+      continue;
+    }
+    const auto Xc = seed_cw.composePoint(mrpt::math::TPoint3D(landmarks_[lm].pos));
+    if (Xc.z < 0.05)
+    {
+      continue;
+    }
+    const float u = fx * static_cast<float>(Xc.x / Xc.z) + cx;
+    const float v = fy * static_cast<float>(Xc.y / Xc.z) + cy;
+    if (u >= 0.f && v >= 0.f && u < W && v < H)
+    {
+      a.next_pts[i] = {u, v};
+    }
+  }
+
+  mola::vision::LKParams lk;
+  lk.win_size          = lk_win_size_;
+  lk.max_levels        = lk_max_levels_;
+  lk.use_initial_guess = true;
+  profiler_.enter("track.LK");
+  mola::vision::calcOpticalFlowPyrLK(prev_gray_, gray, track_pts_, a.next_pts, a.status, lk);
+  profiler_.leave("track.LK");
+
+  // Gather 3D-2D correspondences with known landmarks for PnP.
+  std::vector<TPoint3Df> worldPts;
+  std::vector<TPoint2Df> pixels;
+  std::vector<size_t>    corr_track_idx;  // back-reference into track arrays
+  for (size_t i = 0; i < a.next_pts.size(); ++i)
+  {
+    if (a.status[i] == mola::vision::TrackStatus::LOST)
+    {
+      continue;
+    }
+    a.parallax_sum +=
+        std::hypot(a.next_pts[i].x - track_pts_[i].x, a.next_pts[i].y - track_pts_[i].y);
+    ++a.parallax_n;
+
+    const int lm = track_lm_[i];
+    if (lm < 0 || landmarks_[lm].bad)
+    {
+      continue;
+    }
+    worldPts.push_back(landmarks_[lm].pos);
+    pixels.push_back(a.next_pts[i]);
+    corr_track_idx.push_back(i);
+  }
+
+  a.outlier.assign(a.next_pts.size(), false);
+  if (static_cast<int>(worldPts.size()) < min_pnp_points_)
+  {
+    return a;
+  }
+  mrpt::system::CTimeLoggerEntry tlp(profiler_, "track.PnP");
+  const mola::vision::PnPParams  pp;
+  const auto                     res = mola::vision::solvePnP(worldPts, pixels, cam, seed_cw, pp);
+  a.inliers                          = res.num_inliers;
+  a.localized                        = res.converged && res.num_inliers >= min_pnp_points_;
+  a.pose_cw                          = res.pose;
+  for (size_t k = 0; k < res.inliers.size(); ++k)
+  {
+    if (!res.inliers[k])
+    {
+      a.outlier[corr_track_idx[k]] = true;
+    }
+  }
+  return a;
 }
 
 void RgbdSlam::insertCurrentKeyframe()

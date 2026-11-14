@@ -55,6 +55,11 @@ modules:
       kf_min_tracked: 80
       kf_min_tracked_ratio: 0.6
       kf_min_parallax_px: 18.0
+      # Constant-velocity motion model: past poses over velocity_window [s]
+      # estimate the velocity, extrapolated by the time between frames (up to
+      # max_extrapolation [s]) to seed tracking and bridge missing frames.
+      velocity_window: ${RGBD_VELOCITY_WINDOW|0.3}
+      max_extrapolation: ${RGBD_MAX_EXTRAPOLATION|1.5}
       # 2D feature-overlay subwindow in MolaViz:
       publish_viz_2d: true
       viz2d_title: RGB-D SLAM tracking
