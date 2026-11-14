@@ -119,10 +119,9 @@ TEST(RgbdSlamTUM, MetricAteOnFreiburg1Room)
     {
       continue;
     }
-    mrpt::math::CMatrixFloat depth;
-    depth                        = obs->rangeImage.asEigen().cast<float>() * obs->rangeUnits;
-    const mrpt::img::CImage gray = obs->intensityImage.grayscale();
-    const auto pose = slam.processFrame(gray, depth, obs->cameraParams, obs->timestamp);
+    // Through the module entry point, as in a MOLA system:
+    slam.onNewObservation(obs);
+    const auto pose = slam.currentPose();
     ++n_frames;
     est_t.push_back(mrpt::Clock::toDouble(obs->timestamp));
     est_p.emplace_back(pose.x(), pose.y(), pose.z());
