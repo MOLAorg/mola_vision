@@ -77,8 +77,9 @@ struct DepthCloud
  *  both images share one set of intrinsics ("registered" depth).
  *
  *  Each depth sample is splatted over a square of pixels whose side follows
- *  the focal-length ratio of both cameras, so a target camera with a finer
- *  angular resolution does not get holes between samples.
+ *  the largest focal-length ratio of both cameras (fx and fy), so a target
+ *  camera with a finer angular resolution does not get holes between samples.
+ *  Holes may still appear where the baseline or rotation stretches the image.
  *
  *  \param depth_raw   HxW raw depth values in the depth camera, 0 meaning no
  *                     measurement (e.g. CObservation3DRangeScan::rangeImage).

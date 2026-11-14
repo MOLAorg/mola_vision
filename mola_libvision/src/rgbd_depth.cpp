@@ -135,8 +135,9 @@ mrpt::math::CMatrixFloat mola::vision::registerDepthToCamera(
   const float cyt = static_cast<float>(target_cam.cy());
 
   // Side of the splatted square, in target pixels:
-  const int   n    = std::clamp(static_cast<int>(std::ceil(fxt / fxd - 1e-3f)), 1, 3);
-  const float half = 0.5f * static_cast<float>(n - 1);
+  const float ratio = std::max(fxt / fxd, fyt / fyd);
+  const int   n     = std::clamp(static_cast<int>(std::ceil(ratio - 1e-3f)), 1, 3);
+  const float half  = 0.5f * static_cast<float>(n - 1);
 
   for (int r = 0; r < Hd; ++r)
   {
@@ -156,8 +157,16 @@ mrpt::math::CMatrixFloat mola::vision::registerDepthToCamera(
       }
       const float invZ = 1.0f / P.z();
       // Top-left pixel of the splatted square (the nearest one, if n=1):
-      const int u0 = floorToInt(fxt * P.x() * invZ + cxt - half + 0.5f);
-      const int v0 = floorToInt(fyt * P.y() * invZ + cyt - half + 0.5f);
+      const float uf = fxt * P.x() * invZ + cxt - half + 0.5f;
+      const float vf = fyt * P.y() * invZ + cyt - half + 0.5f;
+      // Also keeps the int conversion below in range:
+      if (!(uf > -4.f && vf > -4.f && uf < static_cast<float>(Wt) + 4.f &&
+            vf < static_cast<float>(Ht) + 4.f))
+      {
+        continue;
+      }
+      const int u0 = floorToInt(uf);
+      const int v0 = floorToInt(vf);
       for (int dv = 0; dv < n; ++dv)
       {
         const int vv = v0 + dv;

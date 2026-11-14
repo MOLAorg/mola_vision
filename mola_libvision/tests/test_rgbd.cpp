@@ -222,3 +222,34 @@ TEST(RGBD, OpticalFrameConvention)
   const auto q = opticalFrameInXForwardFrame().composePoint({1, 0, 0});
   EXPECT_NEAR(q.y, -1.0, 1e-9);
 }
+
+TEST(RGBD, RegisterDepthRotatedAgainstAnalyticPlane)
+{
+  // Depth camera looking at the plane Z = 2 m; target camera with different
+  // intrinsics, a baseline and rotations about two axes. Each registered depth
+  // must match the depth of the same plane along that target pixel's ray.
+  const auto depthCam  = makeCamera(640, 480);
+  auto       targetCam = makeCamera(640, 480);
+  targetCam.setIntrinsicParamsFromValues(560.0, 555.0, 330.0, 236.0);
+  const auto                 raw = flatDepth(640, 480, 2000);
+  const mrpt::poses::CPose3D targetFromDepth(-0.05, 0.01, 0.02, 0.06, -0.04, 0.0);
+
+  const auto out = registerDepthToCamera(raw, 1e-3f, depthCam, targetCam, targetFromDepth);
+
+  const auto            R = targetFromDepth.getRotationMatrix().asEigen();
+  const Eigen::Vector3d t(targetFromDepth.x(), targetFromDepth.y(), targetFromDepth.z());
+  const Eigen::Vector3d m       = R * Eigen::Vector3d::UnitZ();  // plane normal, target frame
+  int                   checked = 0;
+  for (int r = 60; r < 420; r += 37)
+  {
+    for (int c = 60; c < 580; c += 41)
+    {
+      const Eigen::Vector3d ray((c - 330.0) / 560.0, (r - 236.0) / 555.0, 1.0);
+      const double          zAnalytic = (2.0 + m.dot(t)) / m.dot(ray);
+      ASSERT_GT(out(r, c), 0.f) << "hole at r=" << r << " c=" << c;
+      EXPECT_NEAR(out(r, c), zAnalytic, 0.01 * zAnalytic) << "r=" << r << " c=" << c;
+      ++checked;
+    }
+  }
+  EXPECT_GT(checked, 100);
+}

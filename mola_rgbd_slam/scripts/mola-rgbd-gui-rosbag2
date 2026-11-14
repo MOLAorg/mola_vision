@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Runs MOLA RGB-D visual odometry (mola::RgbdSlam) on a ROS 2 bag through
+# mola-cli (online replay, 3D GUI).
+#
+# The RGB-D topics are found automatically in the bag; any RGBD_* or MOLA_*
+# variable exported before invoking this takes precedence. Extra arguments are
+# forwarded to mola-cli.
+set -euo pipefail
+
+usage() {
+  echo "Usage: $0 /path/to/dataset.mcap [additional mola-cli flags]"
+  echo "       $0 /path/to/dataset_directory    (must contain a metadata.yaml)"
+  echo ""
+  echo "Common environment variables:"
+  echo "  RGBD_DEPTH_TOPIC       Depth image topic (default: found in the bag, preferring"
+  echo "                         .../aligned_depth_to_color/image_raw, then .../depth/image_rect_raw)"
+  echo "  RGBD_INTENSITY_TOPIC   Color/IR image topic (default: found in the bag, .../color/image_raw)"
+  echo "  RGBD_BASE_LINK         Robot base /tf frame id (default: 'base_link')"
+  echo "  RGBD_MIN_DEPTH         Minimum landmark depth [m] (default: 0.2). Raise it to ignore"
+  echo "                         parts of the robot in view."
+  echo "  RGBD_MAX_DEPTH         Maximum landmark depth [m] (default: 8.0)"
+  echo "  RGBD_MAX_FEATURES      Tracked features (default: 400)"
+  echo "  RGBD_MAX_TIME_OFFSET   Max. depth/intensity stamp difference [s] (default: 0.005)"
+  echo "  RGBD_CAMERA_POSE_ON_ROBOT  'x y z yaw_deg pitch_deg roll_deg' of the camera optical"
+  echo "                         frame on the robot (default: from /tf)"
+  echo "  RGBD_TRAJECTORY_FILE   Save the vehicle trajectory (TUM format) on exit"
+  echo "  MOLA_TIME_WARP         Playback speed (default: 1.0)"
+}
+
+if [ "$#" -lt 1 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+  usage
+  [ "$#" -ge 1 ] && exit 0
+  exit 1
+fi
+
+BAG=$1
+shift
+if [ ! -e "$BAG" ]; then
+  echo "Error: '$BAG' does not exist." >&2
+  exit 1
+fi
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
+LAUNCH="$SCRIPT_DIR/../mola-cli-launchs/rgbd_slam_from_rosbag2.yaml"
+if [ ! -f "$LAUNCH" ]; then
+  LAUNCH="$SCRIPT_DIR/../share/mola_rgbd_slam/mola-cli-launchs/rgbd_slam_from_rosbag2.yaml"
+fi
+if [ ! -f "$LAUNCH" ]; then
+  echo "Error: launch file rgbd_slam_from_rosbag2.yaml not found." >&2
+  exit 1
+fi
+
+# Find the RGB-D topics in the bag, unless given:
+if [ -z "${RGBD_DEPTH_TOPIC:-}" ] || [ -z "${RGBD_INTENSITY_TOPIC+set}" ]; then
+  IMAGE_TOPICS=$(ros2 bag info "$BAG" 2>/dev/null |
+    sed -n 's/.*Topic: \([^ |]*\) *| *Type: sensor_msgs\/msg\/Image .*/\1/p')
+  pick() {
+    local suffix
+    for suffix in "$@"; do
+      grep -m1 -E -- "${suffix}\$" <<<"$IMAGE_TOPICS" && return 0
+    done
+    return 1
+  }
+  if [ -z "${RGBD_DEPTH_TOPIC:-}" ]; then
+    RGBD_DEPTH_TOPIC=$(pick '/aligned_depth_to_color/image_raw' '/depth/image_rect_raw' \
+      '/depth/image_raw') || {
+      echo "Error: no depth image topic found in '$BAG'. Set RGBD_DEPTH_TOPIC." >&2
+      exit 1
+    }
+    echo "Depth topic:     $RGBD_DEPTH_TOPIC (set RGBD_DEPTH_TOPIC to change it)"
+  fi
+  if [ -z "${RGBD_INTENSITY_TOPIC+set}" ]; then
+    RGBD_INTENSITY_TOPIC=$(pick '/color/image_raw' '/color/image_rect_raw' '/infra1/image_rect_raw') || {
+      echo "Error: no color image topic found in '$BAG'. Set RGBD_INTENSITY_TOPIC." >&2
+      exit 1
+    }
+    echo "Intensity topic: $RGBD_INTENSITY_TOPIC (set RGBD_INTENSITY_TOPIC to change it)"
+  fi
+fi
+
+ROSBAG2_FILE=$BAG
+export ROSBAG2_FILE RGBD_DEPTH_TOPIC RGBD_INTENSITY_TOPIC
+exec mola-cli "$LAUNCH" "$@"

@@ -18,6 +18,7 @@
 
 #include <deque>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <vector>
 
@@ -96,7 +97,8 @@ class RgbdSlam : public mola::FrontEndBase,
 
   /** Current vehicle pose in the "map" frame (the vehicle at the first frame):
    *  T_{B0,Bt} = T_body_cam * T_{C0,Ct} * T_body_cam^-1. It equals the camera
-   *  pose until the camera-on-vehicle extrinsic is known. */
+   *  pose while the camera-on-vehicle extrinsic is unknown (no
+   *  camera_pose_on_robot parameter and an identity sensorPose). */
   [[nodiscard]] mrpt::poses::CPose3D currentRobotPose() const;
 
   /** Camera (optical frame) pose on the vehicle, if known. */
@@ -182,6 +184,7 @@ class RgbdSlam : public mola::FrontEndBase,
   // ---- vehicle frame ----
   std::optional<mrpt::poses::CPose3D> camera_pose_on_robot_;  ///< T_body_cam (optical)
   mrpt::poses::CPose3DInterpolator    estimated_trajectory_;  ///< vehicle poses, if saved
+  std::mutex                          estimated_trajectory_mtx_;
 
   // ---- live tracking state ----
   mrpt::img::CImage                  prev_gray_;

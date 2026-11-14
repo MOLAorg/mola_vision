@@ -7,7 +7,9 @@
 # "aligned_depth_to_color/image_raw". The camera_info topics default to the
 # "camera_info" sibling of each image topic.
 #
-# Usage:
+# Usage (the wrapper finds the RGB-D topics in the bag):
+#   mola-rgbd-gui-rosbag2 /path/to/bag.mcap
+# or directly:
 #   ROSBAG2_FILE=/path/to/bag.mcap \
 #   RGBD_DEPTH_TOPIC=/camera/camera/depth/image_rect_raw \
 #   RGBD_INTENSITY_TOPIC=/camera/camera/color/image_raw \
@@ -42,7 +44,7 @@ modules:
           # Optional; empty means depth only (not usable by RgbdSlam):
           intensity_topic: ${RGBD_INTENSITY_TOPIC|/camera/camera/color/image_raw}
           # Maximum stamp difference to pair depth and intensity frames [s]:
-          max_time_offset: 0.005
+          max_time_offset: ${RGBD_MAX_TIME_OFFSET|0.005}
 
   # =====================
   # RGB-D SLAM front-end
@@ -71,6 +73,8 @@ modules:
       kf_min_tracked_ratio: 0.6
       kf_min_parallax_px: 18.0
       estimated_trajectory_file: ${RGBD_TRAJECTORY_FILE|''}
+      # Camera optical frame on the vehicle; empty: from the observations (/tf):
+      camera_pose_on_robot: ${RGBD_CAMERA_POSE_ON_ROBOT|''}
       publish_viz_2d: true
       viz2d_title: RGB-D SLAM tracking
       viz2d_win_pos: 10 60 800 600 # [x y width height]
