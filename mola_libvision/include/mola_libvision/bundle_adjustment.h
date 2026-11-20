@@ -11,6 +11,7 @@
 #include <Eigen/Core>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 /** \file bundle_adjustment.h
@@ -75,6 +76,12 @@ struct BundleAdjustmentOptions
   /** Rotation-only motion: camera centers are held fixed, only orientations
    *  (and intrinsics, points) are estimated. */
   bool rotation_only = false;
+
+  /** Scale gauge of each disconnected reconstruction when the caller fixes
+   *  the gauge itself through fixed_poses: pairs (a, b) where pose `a` is
+   *  fixed, and the distance from its center to the center of pose `b` is
+   *  held at its initial value. */
+  std::vector<std::pair<int, int>> scale_constraints;
 
   /** When nothing else fixes the similarity gauge of a monocular problem
    *  (no fixed pose, free points), hold the first pose fixed and constrain

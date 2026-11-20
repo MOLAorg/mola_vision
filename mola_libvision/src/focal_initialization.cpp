@@ -135,15 +135,94 @@ double defaultMaxFocal(const FocalSweepOptions& o)
   return 0.5 * static_cast<double>(o.width) / std::tan(10.0 * M_PI / 180.0);
 }
 
-CameraModel zeroDistortionModel(const FocalSweepOptions& o, double f)
+CameraModel sweepModel(const FocalSweepOptions& o, double f)
 {
   const double cx = 0.5 * (static_cast<double>(o.width) - 1.0);
   const double cy = 0.5 * (static_cast<double>(o.height) - 1.0);
-  if (o.model == CameraModelType::Equidistant)
+  auto         d  = [&](int i) { return i < o.distortion.size() ? o.distortion[i] : 0.0; };
+  switch (o.model)
   {
-    return CameraModel::Equidistant(o.width, o.height, f, f, cx, cy, 0, 0, 0, 0);
+    case CameraModelType::Equidistant:
+      return CameraModel::Equidistant(o.width, o.height, f, f, cx, cy, d(0), d(1), d(2), d(3));
+    case CameraModelType::RadTan:
+      return CameraModel::RadTan(o.width, o.height, f, f, cx, cy, d(0), d(1), d(2), d(3), d(4));
+    case CameraModelType::Pinhole:
+    default:
+      return CameraModel::Pinhole(o.width, o.height, f, f, cx, cy);
   }
-  return CameraModel::Pinhole(o.width, o.height, f, f, cx, cy);
+}
+
+/** Local image scale of a camera model at a bearing, in pixels per radian:
+ *  geometric mean of the singular values of the projection Jacobian restricted
+ *  to the tangent plane of the bearing. Converts angular errors to pixels
+ *  without favoring wide (peripherally compressed) fields of view. */
+double pixelsPerRadian(const CameraModel& cam, const Eigen::Vector3d& b)
+{
+  const Eigen::Vector3d       u = b.normalized();
+  Eigen::Vector2d             px;
+  Eigen::Matrix<double, 2, 3> J;
+  if (!cam.project(u, px, &J))
+  {
+    return 0.5 * (cam.fx() + cam.fy());
+  }
+  const Eigen::Vector3d a =
+      std::abs(u.x()) < 0.9 ? Eigen::Vector3d::UnitX() : Eigen::Vector3d::UnitY();
+  const Eigen::Vector3d       t1 = u.cross(a).normalized();
+  const Eigen::Vector3d       t2 = u.cross(t1);
+  Eigen::Matrix<double, 3, 2> T;
+  T.col(0) = t1;
+  T.col(1) = t2;
+  return std::sqrt(std::abs((J * T).determinant()));
+}
+
+/** Per-view angular errors of a correspondence to an essential matrix. */
+void epipolarErrors(
+    const Eigen::Matrix3d& E, const Eigen::Vector3d& b1, const Eigen::Vector3d& b2, double& e1,
+    double& e2)
+{
+  const Eigen::Vector3d u1 = b1.normalized();
+  const Eigen::Vector3d u2 = b2.normalized();
+  const Eigen::Vector3d n2 = E * u1;
+  const Eigen::Vector3d n1 = E.transpose() * u2;
+  e1 = n1.norm() > 1e-15 ? std::asin(std::min(1.0, std::abs(u1.dot(n1)) / n1.norm())) : 0.0;
+  e2 = n2.norm() > 1e-15 ? std::asin(std::min(1.0, std::abs(u2.dot(n2)) / n2.norm())) : 0.0;
+}
+
+/** Error of a correspondence, in pixels, for an essential matrix or (when
+ *  rotation_only) a rotation b2 ~ M b1. */
+double pixelError(
+    const CameraModel& cam, const Eigen::Matrix3d& M, const Eigen::Vector3d& b1,
+    const Eigen::Vector3d& b2, bool rotation_only)
+{
+  if (rotation_only)
+  {
+    return angleBetween(M * b1, b2) * pixelsPerRadian(cam, b2);
+  }
+  double e1 = 0;
+  double e2 = 0;
+  epipolarErrors(M, b1, b2, e1, e2);
+  return 0.5 * (e1 * pixelsPerRadian(cam, b1) + e2 * pixelsPerRadian(cam, b2));
+}
+
+/** Bearings of the correspondences that both views can unproject. */
+void pairBearings(
+    const CameraModel& cam, const ViewPairMatches& m, std::vector<Eigen::Vector3d>& b1,
+    std::vector<Eigen::Vector3d>& b2, std::vector<size_t>& idx)
+{
+  b1.clear();
+  b2.clear();
+  idx.clear();
+  for (size_t i = 0; i < m.p1.size(); ++i)
+  {
+    Eigen::Vector3d a;
+    Eigen::Vector3d b;
+    if (cam.unproject(m.p1[i], a) && cam.unproject(m.p2[i], b))
+    {
+      b1.push_back(a);
+      b2.push_back(b);
+      idx.push_back(i);
+    }
+  }
 }
 
 }  // namespace
@@ -210,51 +289,56 @@ FocalEstimate mola::vision::estimateFocalByTwoViewConsensus(
   const double f_max = options.f_max > 0.0 ? options.f_max : defaultMaxFocal(options);
   const double tau   = options.threshold_px;
 
-  auto bearingsOf = [&](const CameraModel& cam, const std::vector<Eigen::Vector2d>& px,
-                        std::vector<Eigen::Vector3d>& b, std::vector<bool>& ok)
-  {
-    b.resize(px.size());
-    ok.assign(px.size(), false);
-    for (size_t i = 0; i < px.size(); ++i)
-    {
-      ok[i] = cam.unproject(px[i], b[i]);
-      if (!ok[i])
-      {
-        b[i] = Eigen::Vector3d::UnitZ();
-      }
-    }
-  };
-
   // Coarse, sampled cost. Keeps the inliers of each pair at each sample so
   // the fine search can refit deterministically.
-  std::vector<std::vector<std::vector<bool>>> inliers_at;  // [sample][pair]
+  std::vector<std::vector<std::vector<bool>>> inliers_at;  // [sample][pair][match]
   auto                                        coarse_cost = [&](double f)
   {
-    const CameraModel              cam   = zeroDistortionModel(options, f);
+    const CameraModel              cam   = sweepModel(options, f);
     double                         total = 0.0;
     std::vector<std::vector<bool>> in_pairs;
     for (size_t k = 0; k < pairs.size(); ++k)
     {
       std::vector<Eigen::Vector3d> b1;
       std::vector<Eigen::Vector3d> b2;
-      std::vector<bool>            ok1;
-      std::vector<bool>            ok2;
-      bearingsOf(cam, pairs[k].p1, b1, ok1);
-      bearingsOf(cam, pairs[k].p2, b2, ok2);
+      std::vector<size_t>          idx;
+      pairBearings(cam, pairs[k], b1, b2, idx);
+      std::vector<bool> in(pairs[k].p1.size(), false);
+      // Matches that cannot be unprojected pay the outlier cost.
+      total += tau * tau * static_cast<double>(pairs[k].p1.size() - b1.size());
       RansacOptions ro;
       ro.threshold      = tau / f;
       ro.max_iterations = options.max_iterations;
       ro.min_iterations = std::min(options.max_iterations, 100);
       ro.seed           = options.seed + static_cast<unsigned>(k);
-      const auto est    = estimateRelativePose(b1, b2, ro);
-      if (!est.report.success)
+      RansacReport    rep;
+      Eigen::Matrix3d M = Eigen::Matrix3d::Identity();
+      if (options.rotation_only)
+      {
+        const auto est = estimateRotation(b1, b2, ro);
+        rep            = est.report;
+        M              = est.R;
+      }
+      else
+      {
+        const auto est = estimateRelativePose(b1, b2, ro);
+        rep            = est.report;
+        M              = est.E;
+      }
+      if (!rep.success)
       {
         total += tau * tau * static_cast<double>(b1.size());
-        in_pairs.emplace_back(b1.size(), false);
-        continue;
       }
-      total += est.report.score * f * f;
-      in_pairs.push_back(est.report.inliers);
+      else
+      {
+        for (size_t i = 0; i < idx.size(); ++i)
+        {
+          const double e = pixelError(cam, M, b1[i], b2[i], options.rotation_only);
+          total += std::min(e * e, tau * tau);
+          in[idx[i]] = e < tau;
+        }
+      }
+      in_pairs.push_back(in);
     }
     inliers_at.push_back(in_pairs);
     return total;
@@ -271,39 +355,39 @@ FocalEstimate mola::vision::estimateFocalByTwoViewConsensus(
   const auto  best         = static_cast<size_t>(std::distance(out.costs.begin(), best_it));
   const auto& best_inliers = inliers_at[best];
 
-  // Fine search: deterministic linear refit on the best sample's inliers, so
-  // the cost is a smooth function of the focal length.
+  // Fine search: deterministic refit on the best sample's inliers, so the
+  // cost is a smooth function of the focal length.
   auto fine_cost = [&](double f)
   {
-    const CameraModel cam   = zeroDistortionModel(options, f);
+    const CameraModel cam   = sweepModel(options, f);
     double            total = 0.0;
     for (size_t k = 0; k < pairs.size(); ++k)
     {
       std::vector<Eigen::Vector3d> b1;
       std::vector<Eigen::Vector3d> b2;
-      std::vector<bool>            ok1;
-      std::vector<bool>            ok2;
-      bearingsOf(cam, pairs[k].p1, b1, ok1);
-      bearingsOf(cam, pairs[k].p2, b2, ok2);
+      std::vector<size_t>          idx;
+      pairBearings(cam, pairs[k], b1, b2, idx);
+      total += tau * tau * static_cast<double>(pairs[k].p1.size() - b1.size());
       std::vector<Eigen::Vector3d> s1;
       std::vector<Eigen::Vector3d> s2;
-      for (size_t i = 0; i < b1.size(); ++i)
+      for (size_t i = 0; i < idx.size(); ++i)
       {
-        if (best_inliers[k][i] && ok1[i] && ok2[i])
+        if (best_inliers[k][idx[i]])
         {
           s1.push_back(b1[i]);
           s2.push_back(b2[i]);
         }
       }
-      const auto E = solveEssentialLinear(s1, s2);
-      if (!E)
+      const auto Mo =
+          options.rotation_only ? solveRotationKabsch(s1, s2) : solveEssentialLinear(s1, s2);
+      if (!Mo)
       {
         total += tau * tau * static_cast<double>(b1.size());
         continue;
       }
       for (size_t i = 0; i < b1.size(); ++i)
       {
-        const double e = epipolarAngularError(*E, b1[i], b2[i]) * f;
+        const double e = pixelError(cam, *Mo, b1[i], b2[i], options.rotation_only);
         total += std::min(e * e, tau * tau);
       }
     }

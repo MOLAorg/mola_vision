@@ -62,7 +62,8 @@ class CalibReprojectionFactor : public gtsam::NoiseModelFactor
     Eigen::Vector3d point_const = Eigen::Vector3d::Zero();
     CameraModel     camera;  ///< reference camera (constant intrinsics, or fixed part)
     std::shared_ptr<const IntrinsicsParameterization> param;
-    Eigen::Vector2d                                   z = Eigen::Vector2d::Zero();
+    Eigen::Vector2d                                   z     = Eigen::Vector2d::Zero();
+    double                                            sigma = 1.0;  ///< pixels
   };
 
   CalibReprojectionFactor(
@@ -150,7 +151,7 @@ class CalibReprojectionFactor : public gtsam::NoiseModelFactor
 
     if (!ok)
     {
-      const double e = kInvalidError * noiseModel()->sigmas()[0];
+      const double e = kInvalidError * s_.sigma;
       if (H)
       {
         auto& Hs = *H;
@@ -418,7 +419,8 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
       keys.push_back(intrKey(ci));
       cam_used[ci] = true;
     }
-    s.z = ob.pixel;
+    s.z     = ob.pixel;
+    s.sigma = ob.sigma;
     if (keys.empty())
     {
       continue;
@@ -464,6 +466,24 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
       values.insert(intrKey(c), gtsam::Vector(params[c]->toFree(problem.cameras[c])));
       intr_keys.push_back(intrKey(c));
     }
+  }
+  for (const auto& [a, b] : options.scale_constraints)
+  {
+    if (a < 0 || b < 0 || static_cast<size_t>(a) >= nPoses || static_cast<size_t>(b) >= nPoses ||
+        !pose_fixed[static_cast<size_t>(a)] || !pose_used[static_cast<size_t>(b)])
+    {
+      continue;
+    }
+    const auto   ka = static_cast<size_t>(a);
+    const auto   kb = static_cast<size_t>(b);
+    const double d0 = (T_wc[kb].translation() - T_wc[ka].translation()).norm();
+    if (d0 < 1e-12)
+    {
+      continue;
+    }
+    graph.emplace_shared<CenterDistanceFactor>(
+        gtsam::noiseModel::Isotropic::Sigma(1, 1e-4 * d0), poseKey(kb),
+        Eigen::Vector3d(T_wc[ka].translation()), d0);
   }
   if (scale_pose >= 0 && pose_used[static_cast<size_t>(scale_pose)])
   {
@@ -567,12 +587,24 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
         out.intrinsics_covariance.clear();
         out.free_intrinsics_covariance.clear();
       }
+      catch (...)
+      {
+        out.message = "covariance not available";
+        out.intrinsics_covariance.clear();
+        out.free_intrinsics_covariance.clear();
+      }
     }
   }
   catch (const std::exception& e)
   {
     out.success = false;
     out.message = std::string("optimization failed: ") + e.what();
+    return out;
+  }
+  catch (...)
+  {
+    out.success = false;
+    out.message = "optimization failed: unknown exception";
     return out;
   }
 
