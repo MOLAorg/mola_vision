@@ -25,6 +25,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
 
 // GTSAM 4.3 replaced boost::optional Jacobian arguments by raw pointers.
 #if GTSAM_VERSION_NUMERIC >= 40300
@@ -254,6 +255,32 @@ class CenterDistanceFactor : public gtsam::NoiseModelFactor
   double          distance_;
 };
 
+/** Unary factor holding a camera center at a given position (rotation free):
+ *  fixes the translation gauge of a reconstruction component whose rotation
+ *  is tied to the others through points at infinity. */
+class CenterPriorFactor : public gtsam::NoiseModelFactor
+{
+ public:
+  CenterPriorFactor(const gtsam::SharedNoiseModel& noise, gtsam::Key key, const Eigen::Vector3d& c)
+      : gtsam::NoiseModelFactor(noise, gtsam::KeyVector{key}), c_(c)
+  {
+  }
+
+  gtsam::Vector unwhitenedError(const gtsam::Values& x, MOLA_GTSAM_JACOBIANS) const override
+  {
+    Eigen::Matrix<double, 3, 6> Ht;
+    const gtsam::Point3         t = x.at<gtsam::Pose3>(keys()[0]).translation(Ht);
+    if (H)
+    {
+      (*H)[0] = Ht;
+    }
+    return t - c_;
+  }
+
+ private:
+  Eigen::Vector3d c_;
+};
+
 gtsam::SharedNoiseModel makeNoise(double sigma, const BundleAdjustmentOptions& o)
 {
   auto base = gtsam::noiseModel::Isotropic::Sigma(2, sigma);
@@ -472,27 +499,106 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
     if (anchor >= 0)
     {
       pose_fixed[static_cast<size_t>(anchor)] = true;
-      if (!options.rotation_only)
+    }
+  }
+
+  // Components of poses linked by shared finite points (union-find). Points
+  // at infinity tie rotations together but not positions or scale, so each
+  // finite component needs its own translation and scale gauge.
+  std::vector<size_t> comp(nPoses);
+  for (size_t i = 0; i < nPoses; ++i)
+  {
+    comp[i] = i;
+  }
+  auto findRoot = [&](size_t i)
+  {
+    while (comp[i] != i)
+    {
+      comp[i] = comp[comp[i]];
+      i       = comp[i];
+    }
+    return i;
+  };
+  {
+    std::vector<int> first_obs(nPoints, -1);
+    for (const size_t o : admitted)
+    {
+      const auto pi = static_cast<size_t>(problem.observations[o].pose);
+      const auto li = static_cast<size_t>(problem.observations[o].point);
+      if (inf[li])
       {
-        const Eigen::Vector3d C0   = T_wc[static_cast<size_t>(anchor)].translation();
-        double                best = 0.0;
-        for (size_t i = 0; i < nPoses; ++i)
+        continue;
+      }
+      if (first_obs[li] < 0)
+      {
+        first_obs[li] = static_cast<int>(pi);
+      }
+      else
+      {
+        comp[findRoot(pi)] = findRoot(static_cast<size_t>(first_obs[li]));
+      }
+    }
+  }
+  // Per component: a reference pose and the farthest pose from it (scale).
+  struct ComponentGauge
+  {
+    int ref   = -1;
+    int scale = -1;
+  };
+  std::vector<ComponentGauge> extra_components;
+  if (gauge_free && options.fix_gauge && anchor >= 0 && !options.rotation_only)
+  {
+    std::vector<int> ref_of(nPoses, -1);
+    for (size_t i = 0; i < nPoses; ++i)
+    {
+      if (pose_obs[i] && pose_finite[i])
+      {
+        const size_t r = findRoot(i);
+        if (ref_of[r] < 0)
         {
-          if (!pose_finite[i] || static_cast<int>(i) == anchor)
-          {
-            continue;
-          }
-          const double d = (T_wc[i].translation() - C0).norm();
-          if (d > best)
-          {
-            best       = d;
-            scale_pose = static_cast<int>(i);
-          }
+          ref_of[r] = static_cast<int>(i);
         }
-        if (best < 1e-12)
+      }
+    }
+    const size_t anchor_root = findRoot(static_cast<size_t>(anchor));
+    if (pose_finite[static_cast<size_t>(anchor)])
+    {
+      ref_of[anchor_root] = anchor;
+    }
+    for (size_t r = 0; r < nPoses; ++r)
+    {
+      if (ref_of[r] < 0)
+      {
+        continue;
+      }
+      const auto            ref  = static_cast<size_t>(ref_of[r]);
+      const Eigen::Vector3d C0   = T_wc[ref].translation();
+      double                best = 0.0;
+      int                   far  = -1;
+      for (size_t i = 0; i < nPoses; ++i)
+      {
+        if (i == ref || !pose_finite[i] || !pose_obs[i] || findRoot(i) != r)
         {
-          scale_pose = -1;
+          continue;
         }
+        const double d = (T_wc[i].translation() - C0).norm();
+        if (d > best)
+        {
+          best = d;
+          far  = static_cast<int>(i);
+        }
+      }
+      if (best < 1e-12)
+      {
+        far = -1;
+      }
+      if (r == anchor_root && pose_finite[static_cast<size_t>(anchor)])
+      {
+        scale_pose = far;
+      }
+      else
+      {
+        extra_components.push_back({static_cast<int>(ref), far});
       }
     }
   }
@@ -530,6 +636,7 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
   std::vector<bool>           point_used(nPoints, false);
   std::vector<bool>           cam_used(nCameras, false);
   int                         projectable = 0;
+  std::vector<bool>           valid_at_start(problem.observations.size(), false);
 
   for (const size_t o : admitted)
   {
@@ -579,6 +686,7 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
       if (s.camera.project(pc, px))
       {
         ++projectable;
+        valid_at_start[o] = true;
       }
     }
     graph.emplace_shared<CalibReprojectionFactor>(makeNoise(ob.sigma, options), keys, s);
@@ -673,6 +781,25 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
     {
       addScale(static_cast<size_t>(anchor), static_cast<size_t>(scale_pose));
     }
+    for (const auto& cg : extra_components)
+    {
+      const auto ref = static_cast<size_t>(cg.ref);
+      if (!pose_used[ref] || pose_var[ref] != PoseVar::Full)
+      {
+        continue;
+      }
+      const double d0 =
+          cg.scale >= 0
+              ? (T_wc[static_cast<size_t>(cg.scale)].translation() - T_wc[ref].translation()).norm()
+              : 1.0;
+      graph.emplace_shared<CenterPriorFactor>(
+          gtsam::noiseModel::Isotropic::Sigma(3, 1e-4 * d0), poseKey(ref),
+          Eigen::Vector3d(T_wc[ref].translation()));
+      if (cg.scale >= 0)
+      {
+        addScale(ref, static_cast<size_t>(cg.scale));
+      }
+    }
   }
 
   if (graph.empty() || values.empty())
@@ -696,11 +823,30 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
       lm.setVerbosityLM("SUMMARY");
     }
     out.initial_cost = graph.error(values);
-    gtsam::LevenbergMarquardtOptimizer opt(graph, values, lm);
-    const gtsam::Values                result = opt.optimize();
-    out.final_cost                            = graph.error(result);
-    out.iterations                            = static_cast<int>(opt.iterations());
-    out.success                               = std::isfinite(out.final_cost);
+    gtsam::Values result;
+    {
+      gtsam::LevenbergMarquardtOptimizer opt(graph, values, lm);
+      result         = opt.optimize();
+      out.iterations = static_cast<int>(opt.iterations());
+    }
+    out.final_cost = graph.error(result);
+    // Cholesky refuses numerically singular steps, and LM then stops where it
+    // started. When no progress at all was made, retry with QR.
+    if (!(out.final_cost < out.initial_cost) && out.initial_cost > 0.0)
+    {
+      gtsam::LevenbergMarquardtParams lm_qr = lm;
+      lm_qr.linearSolverType                = gtsam::NonlinearOptimizerParams::MULTIFRONTAL_QR;
+      gtsam::LevenbergMarquardtOptimizer opt(graph, values, lm_qr);
+      const gtsam::Values                r2 = opt.optimize();
+      const double                       c2 = graph.error(r2);
+      if (c2 < out.final_cost)
+      {
+        result         = r2;
+        out.final_cost = c2;
+        out.iterations = static_cast<int>(opt.iterations());
+      }
+    }
+    out.success = std::isfinite(out.final_cost);
 
     // Write back.
     for (size_t i = 0; i < nPoses; ++i)
@@ -819,33 +965,84 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
           }
           return cov_graph;
         };
-        // Prior sigma in scene units and radians. A second, ten times weaker
+        // Prior sigma in scene units and radians. A second, 100 times weaker
         // set reveals directions that only the priors determine: their
         // variance follows the prior instead of the data, and they are
         // reported as unobservable (NaN) rather than with a finite sigma.
-        const double           weak = 1e3;
-        const gtsam::Marginals marg(withWeakPriors(weak), result, ordering);
-        const gtsam::Marginals marg_weaker(withWeakPriors(10.0 * weak), result, ordering);
+        // If an exact null direction makes the factorization numerically
+        // fail, the regularization is strengthened and the test repeated.
+        std::optional<gtsam::Marginals> marg;
+        std::optional<gtsam::Marginals> marg_weaker;
+        for (const auto fact : {gtsam::Marginals::CHOLESKY, gtsam::Marginals::QR})
+        {
+          for (const double weak : {1e3, 1e1})
+          {
+            try
+            {
+              marg.emplace(withWeakPriors(weak), result, ordering, fact);
+              marg_weaker.emplace(withWeakPriors(100.0 * weak), result, ordering, fact);
+              break;
+            }
+            catch (const std::exception&)
+            {
+              // Cholesky refuses numerically singular systems; retry with a
+              // stronger regularization, then with QR.
+              marg.reset();
+              marg_weaker.reset();
+            }
+          }
+          if (marg && marg_weaker)
+          {
+            break;
+          }
+        }
+        if (!marg || !marg_weaker)
+        {
+          throw std::runtime_error("the information matrix could not be factorized");
+        }
         for (size_t c = 0; c < nCameras; ++c)
         {
           if (!cam_used[c])
           {
             continue;
           }
-          Eigen::MatrixXd       C  = marg.marginalCovariance(intrKey(c));
-          const Eigen::MatrixXd C2 = marg_weaker.marginalCovariance(intrKey(c));
+          Eigen::MatrixXd       C  = marg->marginalCovariance(intrKey(c));
+          const Eigen::MatrixXd C2 = marg_weaker->marginalCovariance(intrKey(c));
           for (Eigen::Index k = 0; k < C.rows(); ++k)
           {
-            if (!(C2(k, k) <= 4.0 * C(k, k)))
+            // Data-determined variances do not move; prior-determined ones
+            // grow with the prior (up to 10^4 times here).
+            if (!(C2(k, k) <= 2.0 * C(k, k)))
             {
               C.row(k).setConstant(std::numeric_limits<double>::quiet_NaN());
               C.col(k).setConstant(std::numeric_limits<double>::quiet_NaN());
               out.message = "some intrinsics are not observable from these views";
             }
           }
-          const Eigen::MatrixXd& J          = params[c]->jacobian();
+          // Propagate to the full parameter vector, skipping zero Jacobian
+          // entries so a NaN does not leak into fixed parameters.
+          const Eigen::MatrixXd& J  = params[c]->jacobian();
+          Eigen::MatrixXd        CF = Eigen::MatrixXd::Zero(J.rows(), J.rows());
+          for (Eigen::Index r1 = 0; r1 < J.rows(); ++r1)
+          {
+            for (Eigen::Index r2 = 0; r2 < J.rows(); ++r2)
+            {
+              double acc = 0.0;
+              for (Eigen::Index a = 0; a < J.cols(); ++a)
+              {
+                for (Eigen::Index b = 0; b < J.cols(); ++b)
+                {
+                  if (J(r1, a) != 0.0 && J(r2, b) != 0.0)
+                  {
+                    acc += J(r1, a) * C(a, b) * J(r2, b);
+                  }
+                }
+              }
+              CF(r1, r2) = acc;
+            }
+          }
           out.free_intrinsics_covariance[c] = C;
-          out.intrinsics_covariance[c]      = J * C * J.transpose();
+          out.intrinsics_covariance[c]      = CF;
         }
       }
       catch (const std::exception& e)
@@ -903,17 +1100,16 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
   {
     // The optimizer can lower its cost by pushing badly fitting observations
     // beyond the model's valid range (they then pay a constant penalty with
-    // a zero gradient): refuse such solutions.
-    int still = 0;
+    // a zero gradient): refuse solutions that lose initially valid ones.
+    int lost = 0;
     for (const size_t o : admitted)
     {
-      if (std::isfinite(out.residuals[o]))
+      if (valid_at_start[o] && !std::isfinite(out.residuals[o]))
       {
-        ++still;
+        ++lost;
       }
     }
-    const int lost = projectable - still;
-    if (lost > std::max(2, static_cast<int>(0.005 * projectable)))
+    if (lost > options.max_lost_projections)
     {
       out.success = false;
       out.message = "the solution moved " + std::to_string(lost) +

@@ -91,11 +91,19 @@ struct BundleAdjustmentOptions
   std::vector<std::pair<int, int>> scale_constraints;
 
   /** When nothing else fixes the similarity gauge of a monocular problem
-   *  (no fixed pose, free points), hold the first pose fixed and constrain
-   *  the distance from it to the farthest camera center. */
+   *  (no fixed pose, free points), hold a pose fixed and constrain the
+   *  distance from it to the farthest camera center of its component (poses
+   *  linked by finite points); other such components get their center and
+   *  scale held the same way, their rotations staying free. */
   bool fix_gauge = true;
 
-  /** Compute the marginal covariance of the free intrinsics. */
+  /** The solve fails if more than this many observations that projected at
+   *  the start no longer do: pushing an observation beyond the model's valid
+   *  range can otherwise lower the cost. */
+  int max_lost_projections = 0;
+
+  /** Compute the marginal covariance of the free intrinsics. Directions that
+   *  only the internal regularization determines are reported as NaN. */
   bool compute_covariance = false;
 
   bool verbose = false;

@@ -441,3 +441,104 @@ TEST(SelfCalibration, IntrinsicsPriorHoldsTheFocal)
   auto bad                  = base;
   EXPECT_FALSE(bundleAdjust(bad, o).success);
 }
+
+TEST(SelfCalibration, CovarianceFlagsUnobservableFocal)
+{
+  // Two fixed cameras at the same pose see a few directions: the focal
+  // length cannot be separated from the directions themselves.
+  const auto              cam = CameraModel::Pinhole(640, 480, 500, 500, 319.5, 239.5);
+  BundleAdjustmentProblem p;
+  p.cameras = {cam};
+  p.poses   = {mrpt::poses::CPose3D(), mrpt::poses::CPose3D()};
+  for (const auto& d : {Eigen::Vector3d(0.1, 0.0, 1.0), Eigen::Vector3d(-0.2, 0.1, 1.0)})
+  {
+    p.points.push_back(d.normalized());
+  }
+  p.point_at_infinity = {true, true};
+  for (int i = 0; i < 2; ++i)
+  {
+    for (int j = 0; j < 2; ++j)
+    {
+      BAObservationPx o;
+      o.pose  = i;
+      o.point = j;
+      Eigen::Vector2d px;
+      cam.project(p.points[static_cast<size_t>(j)], px);
+      o.pixel = px;
+      p.observations.push_back(o);
+    }
+  }
+  BundleAdjustmentOptions o;
+  IntrinsicsMask          m;
+  m.fixed_aspect_ratio       = true;
+  m.estimate_principal_point = false;
+  o.intrinsics               = {m};
+  o.fixed_poses              = {true, true};
+  o.compute_covariance       = true;
+  const auto r               = bundleAdjust(p, o);
+  ASSERT_TRUE(r.success) << r.message;
+  ASSERT_EQ(r.intrinsics_covariance.size(), 1u) << r.message;
+  const auto& C = r.intrinsics_covariance[0];
+  EXPECT_TRUE(std::isnan(C(0, 0)));  // focal: unobservable
+  EXPECT_EQ(C(2, 2), 0.0);  // fixed principal point: zero, not NaN
+  EXPECT_EQ(C(3, 3), 0.0);
+}
+
+TEST(SelfCalibration, GaugeForSeparateFiniteComponents)
+{
+  // Two groups of views with their own finite points, tied only by shared
+  // points at infinity: each group gets its own translation and scale gauge.
+  const auto gt = CameraModel::RadTan(640, 480, 500, 500, 320, 240, -0.1, 0.01, 0, 0, 0);
+  auto       s  = makeSequence(gt, 12, 400, 0.3, 51, 20.0, 1.5);
+  BundleAdjustmentProblem p     = perturbedProblem(s, gt, 9, 0.002, 0.01, 0.02);
+  const size_t            n_fin = p.points.size();
+  // Directions seen by everybody.
+  std::mt19937                           rng(3);
+  std::uniform_real_distribution<double> u(-0.4, 0.4);
+  for (int k = 0; k < 60; ++k)
+  {
+    const Eigen::Vector3d d = Eigen::Vector3d(u(rng), u(rng), 1.0).normalized();
+    p.points.push_back(d);
+    for (size_t i = 0; i < p.poses.size(); ++i)
+    {
+      Eigen::Vector2d px;
+      if (gt.project(rotOf(s.poses[i]) * d, px) && px.x() > 0 && px.y() > 0 && px.x() < 639 &&
+          px.y() < 479)
+      {
+        BAObservationPx o;
+        o.pose  = static_cast<int>(i);
+        o.point = static_cast<int>(p.points.size() - 1);
+        o.pixel = px;
+        p.observations.push_back(o);
+      }
+    }
+  }
+  p.point_at_infinity.assign(p.points.size(), false);
+  for (size_t j = n_fin; j < p.points.size(); ++j)
+  {
+    p.point_at_infinity[j] = true;
+  }
+  // Split the finite points: first half of the views keeps the even points,
+  // second half the odd ones.
+  std::vector<BAObservationPx> kept;
+  for (const auto& o : p.observations)
+  {
+    const bool fin = static_cast<size_t>(o.point) < n_fin;
+    const bool g1  = o.pose < 6;
+    if (!fin || (g1 && o.point % 2 == 0) || (!g1 && o.point % 2 == 1))
+    {
+      kept.push_back(o);
+    }
+  }
+  p.observations = kept;
+  BundleAdjustmentOptions o;
+  IntrinsicsMask          m;
+  m.estimate_distortion = IntrinsicsMask::FirstN(5, 2);
+  o.intrinsics          = {m};
+  o.compute_covariance  = true;
+  const auto r          = bundleAdjust(p, o);
+  ASSERT_TRUE(r.success) << r.message;
+  EXPECT_NEAR(p.cameras[0].fx(), 500.0, 2.0);
+  ASSERT_EQ(r.intrinsics_covariance.size(), 1u);
+  EXPECT_TRUE(std::isfinite(r.intrinsics_covariance[0](0, 0)));
+}
