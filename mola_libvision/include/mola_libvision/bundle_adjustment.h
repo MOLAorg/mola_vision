@@ -69,6 +69,13 @@ struct BundleAdjustmentOptions
    *  keeps that camera fixed. */
   std::vector<std::optional<IntrinsicsMask>> intrinsics;
 
+  /** Optional Gaussian prior on each camera's free intrinsics, centered at
+   *  their initial values: one standard deviation per free parameter, in the
+   *  IntrinsicsParameterization order. A missing or empty entry means no
+   *  prior. Useful to keep intrinsics from wandering while few views
+   *  constrain them (e.g. while an incremental reconstruction grows). */
+  std::vector<Eigen::VectorXd> intrinsics_prior_sigmas;
+
   /** Poses held fixed; empty means none. */
   std::vector<bool> fixed_poses;
   /** Hold all points fixed. */

@@ -605,8 +605,16 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
   {
     if (cam_used[c])
     {
-      values.insert(intrKey(c), gtsam::Vector(params[c]->toFree(problem.cameras[c])));
+      const gtsam::Vector v0 = params[c]->toFree(problem.cameras[c]);
+      values.insert(intrKey(c), v0);
       intr_keys.push_back(intrKey(c));
+      if (c < options.intrinsics_prior_sigmas.size() &&
+          options.intrinsics_prior_sigmas[c].size() == v0.size())
+      {
+        graph.emplace_shared<gtsam::PriorFactor<gtsam::Vector>>(
+            intrKey(c), v0,
+            gtsam::noiseModel::Diagonal::Sigmas(options.intrinsics_prior_sigmas[c]));
+      }
     }
   }
   // Scale constraints act on camera centers: only for full pose variables.
