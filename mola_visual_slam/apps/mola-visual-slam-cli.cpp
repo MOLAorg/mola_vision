@@ -6,7 +6,7 @@
 
  Copyright (C) 2018-2026 Jose Luis Blanco, University of Almeria,
                          and individual contributors.
- SPDX-License-Identifier: GPL-3.0
+ SPDX-License-Identifier: GPL-3.0-or-later
  See LICENSE for full license information.
 */
 

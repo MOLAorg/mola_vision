@@ -21,6 +21,8 @@
   <depend>mrpt_poses</depend>
   <depend>gtsam</depend>
 
+  <test_depend>libgtest-dev</test_depend>
+
   <doc_depend>doxygen</doc_depend>
 
   <buildtool_depend>cmake</buildtool_depend>

@@ -20,4 +20,5 @@ Refer to the [official documentation](https://docs.mola-slam.org/latest/) for bu
 
 
 ## License
-This package is released under the BSD 3-Clause License.
+This repository is released under the GNU General Public License v3.0 or later
+(GPL-3.0-or-later). See [LICENSE](LICENSE).

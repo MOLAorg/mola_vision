@@ -102,8 +102,11 @@ else()
 endif()
 
 # Unit tests:
-enable_testing()
-add_subdirectory(tests)
+option(BUILD_TESTING "Build the unit tests" ON)
+if(BUILD_TESTING)
+  enable_testing()
+  add_subdirectory(tests)
+endif()
 
 # -----------------------------------------------------------------------------
 #  ROS2

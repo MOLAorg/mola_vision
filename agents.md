@@ -121,7 +121,7 @@ colcon build  --packages-select mola_libvision --event-handlers console_direct+
 colcon test   --packages-select mola_libvision
 colcon test-result --all
 ```
-Do NOT source `~/ros2_cadtech_ws` (old MRPT-2.x `mola_kernel`, whose
+Do NOT source any other workspace carrying an old MRPT-2.x `mola_kernel` (its
 `VizInterface` uses `mrpt::opengl` instead of `mrpt::viz`). The repo root carries
 a `COLCON_IGNORE` marker; build a single package with `--base-paths .`.
 
@@ -142,7 +142,6 @@ a `COLCON_IGNORE` marker; build a single package with `--base-paths .`.
   for fixed-size Eigen types in STL containers (the default allocator honors
   over-alignment).
 - Public APIs use MRPT types so the wider MRPT/MOLA audience can reuse them.
-- Working plan with task checklist: `~/plans/mola_vision_plan.md`.
 - `mola::VisualSlam` does all its work synchronously in `onNewObservation()`
   (`spinOnce()` is a no-op), so it is deterministic and can run as an extra
   front-end inside another app's loop. `mola_visual_slam/params/*.yaml` are
