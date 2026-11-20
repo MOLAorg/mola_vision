@@ -1,3 +1,5 @@
+# Copyright (C) 2026, Jose Luis Blanco-Claraco
+# SPDX-License-Identifier: GPL-3.0-or-later
 find_package(GTest REQUIRED)
 include(GoogleTest)
 # List the tests when they run, not at build time: at build time, the test

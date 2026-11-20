@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026, Jose Luis Blanco-Claraco
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Runs MOLA RGB-D visual odometry (mola::RgbdSlam) on a ROS 2 bag through
 # mola-cli (online replay, 3D GUI).
 #

@@ -1,3 +1,5 @@
+# Copyright (C) 2026, Jose Luis Blanco-Claraco
+# SPDX-License-Identifier: GPL-3.0-or-later
 # -----------------------------------------------------------------------------
 #                        MOLA system definition
 # Demo: detect + track image features from the EuRoC MAV dataset (left camera,

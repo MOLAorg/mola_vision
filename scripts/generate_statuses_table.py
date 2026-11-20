@@ -1,4 +1,6 @@
 #!/bin/env python3
+# Copyright (C) 2026, Jose Luis Blanco-Claraco
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 import os
 

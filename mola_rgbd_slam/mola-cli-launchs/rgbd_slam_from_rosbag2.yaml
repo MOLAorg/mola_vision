@@ -1,3 +1,5 @@
+# Copyright (C) 2026, Jose Luis Blanco-Claraco
+# SPDX-License-Identifier: GPL-3.0-or-later
 # -----------------------------------------------------------------------------
 #                        MOLA system definition
 # RGB-D visual SLAM (mola::RgbdSlam) from a ROS 2 bag (mcap or sqlite3) with

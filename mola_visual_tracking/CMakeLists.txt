@@ -3,7 +3,7 @@
 #
 # Copyright (C) 2018-2026, Jose Luis Blanco-Claraco, contributors (AUTHORS.md)
 # All rights reserved.
-# Released under the GNU GPL v3 license. See LICENSE file
+# SPDX-License-Identifier: GPL-3.0-or-later
 # ------------------------------------------------------------------------------
 
 cmake_minimum_required(VERSION 3.5)

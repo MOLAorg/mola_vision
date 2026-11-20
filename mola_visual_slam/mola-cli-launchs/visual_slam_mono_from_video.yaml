@@ -1,3 +1,5 @@
+# Copyright (C) 2026, Jose Luis Blanco-Claraco
+# SPDX-License-Identifier: GPL-3.0-or-later
 # -----------------------------------------------------------------------------
 #                        MOLA system definition
 # Monocular visual SLAM (mola::VisualSlam, mode=mono) from a video file or
