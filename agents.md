@@ -92,6 +92,20 @@ Packages:
   room; ground-truth-exact, no dataset needed) plus KITTI/TUM integration tests
   that skip unless their env vars are set.
 
+`mola_libvision` distortion-aware geometry (for self-calibration and for any
+consumer with raw, distorted images): `CameraModel` (pinhole / radtan /
+equidistant, analytic Jacobians, unprojection to bearings), minimal solvers and
+MSAC on bearings (`minimal_solvers.h`, `robust_estimators.h`), focal
+initialization (`focal_initialization.h`), PnP on distorted pixels
+(`pnp_solver.h`), and `bundleAdjust()` (`bundle_adjustment.h`, GTSAM, private
+dependency) with intrinsics as variables, points at infinity, rotation-only
+mode and marginal covariances. Conventions: relative pose x2 = R x1 + t,
+E = [t]x R; poses T_cw; a variable point needs two observations or it is left
+out of the BA. GTSAM 4.2 and 4.3 differ in the factor Jacobian signature
+(boost::optional vs pointer): keep the `MOLA_GTSAM_JACOBIANS` macro. The
+existing VO/SLAM modules still use the pinhole-only `solvePnP()` and
+`slidingWindowBA()`; switching them to `CameraModel` is pending.
+
 ## Build & test (ROS-agnostic; build_type cmake)
 This package needs `mola_common` + the MRPT-3.x `mola_kernel`/`mola_viz` +
 MRPT 3.x on the prefix path. ROS jazzy bundles MRPT 2.x, and the MRPT-3.x colcon

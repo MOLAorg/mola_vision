@@ -555,21 +555,9 @@ std::vector<bool> IntrinsicsMask::FirstN(int total, int n)
 
 namespace
 {
-// Index in the full parameter vector of the i-th distortion coefficient
-// (in CameraModel::distortion() order).
-int distortionIndex(CameraModelType type, int i)
-{
-  (void)type;
-  // Both RadTan [k1 k2 p1 p2 k3] and Equidistant [k1 k2 k3 k4] store the
-  // distortion right after the four pinhole parameters, in that order.
-  return 4 + i;
-}
-
-std::string distortionName(CameraModelType type, int i)
-{
-  const auto names = CameraModel::ParamNames(type);
-  return names.at(static_cast<size_t>(4 + i));
-}
+// Both RadTan [k1 k2 p1 p2 k3] and Equidistant [k1 k2 k3 k4] store their
+// distortion coefficients right after [fx fy cx cy], in CameraModel order.
+constexpr int kFirstDistortionIndex = 4;
 }  // namespace
 
 IntrinsicsParameterization::IntrinsicsParameterization(
@@ -615,10 +603,10 @@ IntrinsicsParameterization::IntrinsicsParameterization(
   {
     if (mask.estimate_distortion[static_cast<size_t>(i)])
     {
-      const int idx = distortionIndex(reference.type(), i);
+      const int idx = kFirstDistortionIndex + i;
       cols.push_back({{idx, 1.0}});
       indices_.push_back(idx);
-      names_.push_back(distortionName(reference.type(), i));
+      names_.push_back(CameraModel::ParamNames(reference.type()).at(static_cast<size_t>(idx)));
     }
   }
 
