@@ -16,9 +16,11 @@
 #include <gtsam/nonlinear/NonlinearFactor.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/Values.h>
+#include <gtsam/slam/PriorFactor.h>
 #include <mola_libvision/bundle_adjustment.h>
 #include <mrpt/math/CMatrixFixed.h>
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -568,7 +570,70 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
       out.free_intrinsics_covariance.assign(nCameras, Eigen::MatrixXd());
       try
       {
-        const gtsam::Marginals marg(graph, result, ordering);
+        // Very weak priors on every pose and point: they only remove exact
+        // null spaces (e.g. the depth of a point seen from one center), which
+        // would otherwise make the whole marginal computation fail, and leave
+        // well-determined directions untouched.
+        double scale = 1.0;
+        {
+          std::vector<double> d;
+          for (size_t j = 0; j < nPoints; ++j)
+          {
+            if (point_used[j] && !atInf(j))
+            {
+              d.push_back((problem.points[j] - T_wc[0].translation()).norm());
+            }
+          }
+          if (!d.empty())
+          {
+            std::nth_element(
+                d.begin(), d.begin() + static_cast<std::ptrdiff_t>(d.size() / 2), d.end());
+            scale = std::max(1e-9, d[d.size() / 2]);
+          }
+        }
+        gtsam::NonlinearFactorGraph cov_graph = graph;
+        const double                weak      = 1e3;  // prior sigma, in scene and radian units
+        for (size_t i = 0; i < nPoses; ++i)
+        {
+          if (!pose_used[i])
+          {
+            continue;
+          }
+          if (options.rotation_only)
+          {
+            cov_graph.emplace_shared<gtsam::PriorFactor<gtsam::Rot3>>(
+                poseKey(i), result.at<gtsam::Rot3>(poseKey(i)),
+                gtsam::noiseModel::Isotropic::Sigma(3, weak));
+          }
+          else
+          {
+            gtsam::Vector6 sg;
+            sg << weak, weak, weak, weak * scale, weak * scale, weak * scale;
+            cov_graph.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(
+                poseKey(i), result.at<gtsam::Pose3>(poseKey(i)),
+                gtsam::noiseModel::Diagonal::Sigmas(sg));
+          }
+        }
+        for (size_t j = 0; j < nPoints; ++j)
+        {
+          if (!point_used[j])
+          {
+            continue;
+          }
+          if (atInf(j))
+          {
+            cov_graph.emplace_shared<gtsam::PriorFactor<gtsam::Unit3>>(
+                pointKey(j), result.at<gtsam::Unit3>(pointKey(j)),
+                gtsam::noiseModel::Isotropic::Sigma(2, weak));
+          }
+          else
+          {
+            cov_graph.emplace_shared<gtsam::PriorFactor<gtsam::Point3>>(
+                pointKey(j), result.at<gtsam::Point3>(pointKey(j)),
+                gtsam::noiseModel::Isotropic::Sigma(3, weak * scale));
+          }
+        }
+        const gtsam::Marginals marg(cov_graph, result, ordering);
         for (size_t c = 0; c < nCameras; ++c)
         {
           if (!cam_used[c])
