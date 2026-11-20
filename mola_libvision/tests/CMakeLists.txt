@@ -161,3 +161,24 @@ mola_vision_add_test(test_loop_closure
 mola_vision_add_test(test_motion_model
   SOURCES test_motion_model.cpp
 )
+
+# ----------------------------------------------------------------------------
+# Test: camera models (radial-tangential, equidistant) and their Jacobians
+# ----------------------------------------------------------------------------
+mola_vision_add_test(test_camera_model
+  SOURCES test_camera_model.cpp
+)
+
+# ----------------------------------------------------------------------------
+# Test: minimal solvers (5-point, 7/8-point, homography, P3P) and MSAC
+# ----------------------------------------------------------------------------
+mola_vision_add_test(test_minimal_solvers
+  SOURCES test_minimal_solvers.cpp
+)
+
+# ----------------------------------------------------------------------------
+# Test: distortion-aware PnP, focal initialization, BA with intrinsics
+# ----------------------------------------------------------------------------
+mola_vision_add_test(test_self_calibration
+  SOURCES test_self_calibration.cpp
+)
