@@ -354,7 +354,9 @@ bool CameraModel::project(
       radTanDistort(params_, x, y, xd, yd, &Jd);
       // Tangential terms can fold the mapping too: require a locally
       // orientation-preserving distortion.
-      if (Jd.determinant() <= 0.0)
+      // Both eigenvalues of the 2x2 Jacobian positive (trace and
+      // determinant): a doubly flipped mapping is a fold too.
+      if (Jd.determinant() <= 0.0 || Jd.trace() <= 0.0)
       {
         return false;
       }
@@ -551,7 +553,9 @@ bool CameraModel::unproject(const Eigen::Vector2d& pixel, Eigen::Vector3d& beari
     double r  = 0.0;
     if (rd > 0.0 && !invertRadial(f, df, rd, r_max, r))
     {
-      return false;
+      // Beyond the radial-only range: tangential terms may still reach it.
+      // Start just inside the valid branch and let the full Newton decide.
+      r = 0.99 * r_max;
     }
     double x = rd > 0.0 ? xd * r / rd : 0.0;
     double y = rd > 0.0 ? yd * r / rd : 0.0;
@@ -608,7 +612,7 @@ bool CameraModel::unproject(const Eigen::Vector2d& pixel, Eigen::Vector3d& beari
       double          ey = 0;
       Eigen::Matrix2d J;
       radTanDistort(params_, x, y, ex, ey, &J);
-      if (J.determinant() <= 0.0)
+      if (J.determinant() <= 0.0 || J.trace() <= 0.0)
       {
         return false;
       }

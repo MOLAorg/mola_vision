@@ -340,12 +340,18 @@ FocalEstimate mola::vision::estimateFocalByTwoViewConsensus(
       }
       else
       {
-        ++supported;
+        int pixel_inliers = 0;
         for (size_t i = 0; i < idx.size(); ++i)
         {
           const double e = pixelError(cam, M, b1[i], b2[i], options.rotation_only);
           total += std::min(e * e, tau * tau);
           in[idx[i]] = e < tau;
+          pixel_inliers += e < tau ? 1 : 0;
+        }
+        // Support needs inliers in pixels too, not only under the angular gate.
+        if (pixel_inliers >= (options.rotation_only ? 2 : 5))
+        {
+          ++supported;
         }
       }
       in_pairs.push_back(in);

@@ -98,6 +98,7 @@ TEST(MinimalSolvers, FivePointRecoversEssential)
       const Eigen::Vector3d sv = Eigen::JacobiSVD<Eigen::Matrix3d>(E).singularValues();
       EXPECT_NEAR(sv[0], sv[1], 1e-6 * sv[0]);
       EXPECT_NEAR(sv[2], 0.0, 1e-6 * sv[0]);
+      EXPECT_NEAR(sv.norm(), 1.0, 1e-9);  // unit Frobenius norm
     }
     if (best < 1e-6)
     {

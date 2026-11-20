@@ -229,3 +229,17 @@ TEST(CameraModel, RejectsRearAxisAndTangentialFolds)
   ASSERT_TRUE(rt.unproject(px, b));
   EXPECT_NEAR(b.x() / b.z(), 2.0 / 3.0, 1e-9);
 }
+
+TEST(CameraModel, TangentialFoldNeedsBothEigenvalues)
+{
+  // Diagonal Jacobian (-2.6, -0.2): positive determinant, still a fold.
+  const auto      cam = CameraModel::RadTan(640, 480, 100, 100, 320, 240, 0, 0, 0, -0.2, 0);
+  Eigen::Vector2d px;
+  EXPECT_FALSE(cam.project({3.0, 0.0, 1.0}, px));
+  // Targets beyond the radial-only range but valid with tangential terms.
+  const auto cam2 = CameraModel::RadTan(640, 480, 300, 300, 320, 240, -1.0, 0, 0, 0.1, 0);
+  ASSERT_TRUE(cam2.project({0.5, 0.0, 1.0}, px));
+  Eigen::Vector3d b;
+  ASSERT_TRUE(cam2.unproject(px, b));
+  EXPECT_NEAR(b.x() / b.z(), 0.5, 1e-9);
+}
