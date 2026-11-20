@@ -65,6 +65,14 @@ struct FocalSweepOptions
   double          f_min       = 0.0;  ///< 0: derived from a 175 deg (fisheye) or 120 deg FOV
   double          f_max       = 0.0;  ///< 0: derived from a 20 deg FOV
   int             num_samples = 30;
+  /** Distortion coefficients assumed during the search (CameraModel order;
+   *  empty means none). Radial-tangential coefficients are defined on the
+   *  normalized plane, so they stay meaningful as the focal length changes,
+   *  which allows a coarse 2D search over (focal, k1). Ignored for Pinhole. */
+  Eigen::VectorXd distortion;
+  /** Score pairs with a rotation-only model (two-point MSAC) instead of a
+   *  general relative pose: for footage that pans about the camera center. */
+  bool rotation_only = false;
   /** Inlier threshold, in pixels (converted to an angle for each focal). */
   double   threshold_px   = 2.0;
   int      max_iterations = 300;
@@ -77,7 +85,8 @@ struct FocalSweepOptions
  *  each pair; the cost is the MSAC score converted to squared pixels, summed
  *  over the pairs. Works for perspective and fisheye lenses, which the
  *  fundamental-matrix methods do not. A final fine search around the best
- *  sample uses a deterministic refit on that sample's inliers. */
+ *  sample uses a deterministic refit on that sample's inliers. Pixels that
+ *  the candidate model cannot unproject count as outliers. */
 FocalEstimate estimateFocalByTwoViewConsensus(
     const std::vector<ViewPairMatches>& pairs, const FocalSweepOptions& options);
 
