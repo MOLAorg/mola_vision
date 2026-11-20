@@ -351,7 +351,13 @@ bool CameraModel::project(
       {
         return false;
       }
-      radTanDistort(params_, x, y, xd, yd, J_point != nullptr ? &Jd : nullptr);
+      radTanDistort(params_, x, y, xd, yd, &Jd);
+      // Tangential terms can fold the mapping too: require a locally
+      // orientation-preserving distortion.
+      if (Jd.determinant() <= 0.0)
+      {
+        return false;
+      }
     }
     pixel.x() = fx_ * xd + params_[2];
     pixel.y() = fy_ * yd + params_[3];
@@ -406,7 +412,11 @@ bool CameraModel::project(
     return false;
   }
   const double theta_d = equidistantThetaD(params_, theta);
-  const bool   small   = r <= kSmallRadius * rho;
+  if (r <= kSmallRadius * rho && Z < 0.0)
+  {
+    return false;  // straight backwards: the direction is undefined
+  }
+  const bool small = r <= kSmallRadius * rho;  // only near the forward axis (Z > 0)
   // s = theta_d / r, with its pinhole limit on the axis.
   const double s  = small ? 1.0 / Z : theta_d / r;
   const double mx = s * X;
@@ -592,6 +602,16 @@ bool CameraModel::unproject(const Eigen::Vector2d& pixel, Eigen::Vector3d& beari
     if (!converged || x * x + y * y >= monotonic_limit_)
     {
       return false;
+    }
+    {
+      double          ex = 0;
+      double          ey = 0;
+      Eigen::Matrix2d J;
+      radTanDistort(params_, x, y, ex, ey, &J);
+      if (J.determinant() <= 0.0)
+      {
+        return false;
+      }
     }
     bearing = Eigen::Vector3d(x, y, 1.0).normalized();
     return true;

@@ -47,7 +47,8 @@ std::optional<Eigen::Matrix3d> solveFundamentalLinear(
     const std::vector<Eigen::Vector2d>& p1, const std::vector<Eigen::Vector2d>& p2);
 
 /** Linear essential matrix from N >= 8 bearing correspondences, projected onto
- *  the essential manifold (singular values {1, 1, 0}). */
+ *  the essential manifold (two equal singular values, the third zero) and
+ *  scaled to unit Frobenius norm, as the five-point solutions. */
 std::optional<Eigen::Matrix3d> solveEssentialLinear(
     const std::vector<Eigen::Vector3d>& b1, const std::vector<Eigen::Vector3d>& b2);
 

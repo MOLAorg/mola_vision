@@ -57,8 +57,9 @@ struct ViewPairMatches
 
 struct FocalSweepOptions
 {
-  /** Model whose focal is searched, with zero distortion: Pinhole/RadTan
-   *  use a perspective mapping, Equidistant an equidistant one. */
+  /** Model whose focal is searched: Pinhole/RadTan use a perspective mapping,
+   *  Equidistant an equidistant one, with the coefficients in `distortion`
+   *  (zero by default). */
   CameraModelType model       = CameraModelType::RadTan;
   uint32_t        width       = 0;
   uint32_t        height      = 0;
@@ -82,8 +83,9 @@ struct FocalSweepOptions
 /** Model-aware focal search by two-view consensus: for each candidate focal
  *  (principal point at the image center, no distortion) the pixels are
  *  unprojected to bearings and a five-point MSAC relative pose is fitted to
- *  each pair; the cost is the MSAC score converted to squared pixels, summed
- *  over the pairs. Works for perspective and fisheye lenses, which the
+ *  each pair (a rotation with `rotation_only`); the cost is the MSAC score
+ *  converted to squared pixels with the local scale of the model, summed over
+ *  the pairs. Works for perspective and fisheye lenses, which the
  *  fundamental-matrix methods do not. A final fine search around the best
  *  sample uses a deterministic refit on that sample's inliers. Pixels that
  *  the candidate model cannot unproject count as outliers. */

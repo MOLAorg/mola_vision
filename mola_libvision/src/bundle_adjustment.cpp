@@ -301,6 +301,12 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
     out.message = "empty problem";
     return out;
   }
+  if (options.loss != RobustLoss::None &&
+      !(std::isfinite(options.loss_scale) && options.loss_scale > 0.0))
+  {
+    out.message = "the robust loss needs a finite, positive loss_scale";
+    return out;
+  }
   // Validate the optional per-pose and per-point maps.
   if (!problem.pose_camera.empty())
   {

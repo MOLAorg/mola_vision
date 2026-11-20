@@ -214,3 +214,18 @@ TEST(CameraModel, EquidistantInverseStaysOnValidBranch)
   ASSERT_TRUE(cam.unproject(px, b));
   EXPECT_NEAR(std::acos(b.z()), th, 1e-9);
 }
+
+TEST(CameraModel, RejectsRearAxisAndTangentialFolds)
+{
+  const auto      fe = CameraModel::Equidistant(640, 480, 300, 300, 320, 240, 0, 0, 0, 0);
+  Eigen::Vector2d px;
+  EXPECT_FALSE(fe.project({0.0, 0.0, -1.0}, px));
+
+  // Strong tangential term: {1,0,1} lies on the folded side.
+  const auto rt = CameraModel::RadTan(640, 480, 300, 300, 320, 240, 0, 0, 0, -0.2, 0);
+  EXPECT_FALSE(rt.project({1.0, 0.0, 1.0}, px));
+  ASSERT_TRUE(rt.project({2.0 / 3.0, 0.0, 1.0}, px));
+  Eigen::Vector3d b;
+  ASSERT_TRUE(rt.unproject(px, b));
+  EXPECT_NEAR(b.x() / b.z(), 2.0 / 3.0, 1e-9);
+}

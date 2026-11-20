@@ -231,6 +231,7 @@ TEST(SelfCalibration, FocalConsensusFisheye)
   fo.model     = CameraModelType::Equidistant;
   fo.width     = 1024;
   fo.height    = 1024;
+  fo.f_min     = 150.0;  // the true focal (290) must be inside the search range
   const auto c = estimateFocalByTwoViewConsensus(pairsOf(s, 4), fo);
   ASSERT_TRUE(c.valid);
   EXPECT_NEAR(c.focal, 290.0, 25.0);
