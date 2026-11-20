@@ -49,6 +49,13 @@ set(LIB_SRCS
   src/orb_detector.cpp
   src/orb_loop_detector.cpp
   src/loop_closure.cpp
+  # Camera models, minimal solvers and self-calibration building blocks:
+  src/camera_model.cpp
+  src/minimal_solvers.cpp
+  src/robust_estimators.cpp
+  src/focal_initialization.cpp
+  src/pnp_camera.cpp
+  src/bundle_adjustment.cpp
 )
 
 set(LIB_PUBLIC_HDRS
@@ -76,6 +83,11 @@ set(LIB_PUBLIC_HDRS
   include/mola_libvision/orb_descriptor.h
   include/mola_libvision/orb_loop_detector.h
   include/mola_libvision/loop_closure.h
+  include/mola_libvision/camera_model.h
+  include/mola_libvision/minimal_solvers.h
+  include/mola_libvision/robust_estimators.h
+  include/mola_libvision/focal_initialization.h
+  include/mola_libvision/bundle_adjustment.h
 )
 
 mola_add_library(

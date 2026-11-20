@@ -5,6 +5,8 @@
  * ------------------------------------------------------------------------- */
 #pragma once
 
+#include <mola_libvision/camera_model.h>
+#include <mola_libvision/robust_estimators.h>
 #include <mrpt/img/TCamera.h>
 #include <mrpt/math/TPoint2D.h>
 #include <mrpt/math/TPoint3D.h>
@@ -96,5 +98,27 @@ PnPResult solvePnP(
     const std::vector<mrpt::math::TPoint3Df>& worldPts,
     const std::vector<mrpt::math::TPoint2Df>& pixels, const mrpt::img::TCamera& cam,
     const mrpt::poses::CPose3D& initialPose, const PnPParams& params = {});
+
+/** Perspective-n-Point with a full camera model: like the TCamera overload,
+ *  but the reprojection residual goes through CameraModel::project(), so
+ *  DISTORTED pixels are used directly (radial-tangential or fisheye) and the
+ *  Jacobians include the distortion. Double precision.
+ *
+ *  \param worldPts    3D points in the world frame.
+ *  \param pixels      Observed (distorted) pixels, same size.
+ *  \param cam         Camera model, intrinsics held fixed.
+ *  \param initialPose Initial guess for T_cw (world -> camera).
+ */
+PnPResult solvePnP(
+    const std::vector<Eigen::Vector3d>& worldPts, const std::vector<Eigen::Vector2d>& pixels,
+    const CameraModel& cam, const mrpt::poses::CPose3D& initialPose, const PnPParams& params = {});
+
+/** Robust PnP without an initial guess: P3P MSAC on the unprojected bearings
+ *  (`ransac.threshold` is in PIXELS here, converted to an angle with the mean
+ *  focal length), then solvePnP() with the camera model on the inliers.
+ *  Inliers in the result are those of the final refinement. */
+PnPResult solvePnPRansac(
+    const std::vector<Eigen::Vector3d>& worldPts, const std::vector<Eigen::Vector2d>& pixels,
+    const CameraModel& cam, const RansacOptions& ransac, const PnPParams& params = {});
 
 }  // namespace mola::vision
