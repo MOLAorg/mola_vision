@@ -392,11 +392,16 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
       {
         first_pose[li] = static_cast<int>(pi);
       }
-      else if (
-          (T_wc[pi].translation() - T_wc[static_cast<size_t>(first_pose[li])].translation())
-              .norm() > 1e-9)
+      else
       {
-        common[li] = false;
+        // Coincident relative to the point's range: no measurable parallax.
+        const Eigen::Vector3d C0       = T_wc[static_cast<size_t>(first_pose[li])].translation();
+        const double          baseline = (T_wc[pi].translation() - C0).norm();
+        const double          range    = (problem.points[li] - C0).norm();
+        if (baseline > 1e-9 * std::max(range, 1e-300))
+        {
+          common[li] = false;
+        }
       }
     }
     for (size_t j = 0; j < nPoints; ++j)
@@ -449,6 +454,14 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
   int        scale_pose = -1;
   if (gauge_free && options.fix_gauge)
   {
+    // Prefer a pose that observes finite points: it ties their frame down.
+    for (size_t i = 0; i < nPoses && anchor < 0; ++i)
+    {
+      if (pose_obs[i] && pose_finite[i])
+      {
+        anchor = static_cast<int>(i);
+      }
+    }
     for (size_t i = 0; i < nPoses && anchor < 0; ++i)
     {
       if (pose_obs[i])
@@ -615,8 +628,14 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
       values.insert(intrKey(c), v0);
       intr_keys.push_back(intrKey(c));
       if (c < options.intrinsics_prior_sigmas.size() &&
-          options.intrinsics_prior_sigmas[c].size() == v0.size())
+          options.intrinsics_prior_sigmas[c].size() > 0)
       {
+        if (options.intrinsics_prior_sigmas[c].size() != v0.size())
+        {
+          out.message = "intrinsics_prior_sigmas[" + std::to_string(c) + "] must have " +
+                        std::to_string(v0.size()) + " entries (one per free parameter)";
+          return out;
+        }
         graph.emplace_shared<gtsam::PriorFactor<gtsam::Vector>>(
             intrKey(c), v0,
             gtsam::noiseModel::Diagonal::Sigmas(options.intrinsics_prior_sigmas[c]));
@@ -755,56 +774,75 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
             scale = std::max(1e-9, d[d.size() / 2]);
           }
         }
-        gtsam::NonlinearFactorGraph cov_graph = graph;
-        const double                weak      = 1e3;  // prior sigma, in scene and radian units
-        for (size_t i = 0; i < nPoses; ++i)
+        auto withWeakPriors = [&](double weak)
         {
-          if (!pose_used[i])
+          gtsam::NonlinearFactorGraph cov_graph = graph;
+          for (size_t i = 0; i < nPoses; ++i)
           {
-            continue;
+            if (!pose_used[i])
+            {
+              continue;
+            }
+            if (pose_var[i] == PoseVar::RotationOnly)
+            {
+              cov_graph.emplace_shared<gtsam::PriorFactor<gtsam::Rot3>>(
+                  poseKey(i), result.at<gtsam::Rot3>(poseKey(i)),
+                  gtsam::noiseModel::Isotropic::Sigma(3, weak));
+            }
+            else
+            {
+              gtsam::Vector6 sg;
+              sg << weak, weak, weak, weak * scale, weak * scale, weak * scale;
+              cov_graph.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(
+                  poseKey(i), result.at<gtsam::Pose3>(poseKey(i)),
+                  gtsam::noiseModel::Diagonal::Sigmas(sg));
+            }
           }
-          if (pose_var[i] == PoseVar::RotationOnly)
+          for (size_t j = 0; j < nPoints; ++j)
           {
-            cov_graph.emplace_shared<gtsam::PriorFactor<gtsam::Rot3>>(
-                poseKey(i), result.at<gtsam::Rot3>(poseKey(i)),
-                gtsam::noiseModel::Isotropic::Sigma(3, weak));
+            if (!point_used[j])
+            {
+              continue;
+            }
+            if (inf[j])
+            {
+              cov_graph.emplace_shared<gtsam::PriorFactor<gtsam::Unit3>>(
+                  pointKey(j), result.at<gtsam::Unit3>(pointKey(j)),
+                  gtsam::noiseModel::Isotropic::Sigma(2, weak));
+            }
+            else
+            {
+              cov_graph.emplace_shared<gtsam::PriorFactor<gtsam::Point3>>(
+                  pointKey(j), result.at<gtsam::Point3>(pointKey(j)),
+                  gtsam::noiseModel::Isotropic::Sigma(3, weak * scale));
+            }
           }
-          else
-          {
-            gtsam::Vector6 sg;
-            sg << weak, weak, weak, weak * scale, weak * scale, weak * scale;
-            cov_graph.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(
-                poseKey(i), result.at<gtsam::Pose3>(poseKey(i)),
-                gtsam::noiseModel::Diagonal::Sigmas(sg));
-          }
-        }
-        for (size_t j = 0; j < nPoints; ++j)
-        {
-          if (!point_used[j])
-          {
-            continue;
-          }
-          if (inf[j])
-          {
-            cov_graph.emplace_shared<gtsam::PriorFactor<gtsam::Unit3>>(
-                pointKey(j), result.at<gtsam::Unit3>(pointKey(j)),
-                gtsam::noiseModel::Isotropic::Sigma(2, weak));
-          }
-          else
-          {
-            cov_graph.emplace_shared<gtsam::PriorFactor<gtsam::Point3>>(
-                pointKey(j), result.at<gtsam::Point3>(pointKey(j)),
-                gtsam::noiseModel::Isotropic::Sigma(3, weak * scale));
-          }
-        }
-        const gtsam::Marginals marg(cov_graph, result, ordering);
+          return cov_graph;
+        };
+        // Prior sigma in scene units and radians. A second, ten times weaker
+        // set reveals directions that only the priors determine: their
+        // variance follows the prior instead of the data, and they are
+        // reported as unobservable (NaN) rather than with a finite sigma.
+        const double           weak = 1e3;
+        const gtsam::Marginals marg(withWeakPriors(weak), result, ordering);
+        const gtsam::Marginals marg_weaker(withWeakPriors(10.0 * weak), result, ordering);
         for (size_t c = 0; c < nCameras; ++c)
         {
           if (!cam_used[c])
           {
             continue;
           }
-          const Eigen::MatrixXd  C          = marg.marginalCovariance(intrKey(c));
+          Eigen::MatrixXd       C  = marg.marginalCovariance(intrKey(c));
+          const Eigen::MatrixXd C2 = marg_weaker.marginalCovariance(intrKey(c));
+          for (Eigen::Index k = 0; k < C.rows(); ++k)
+          {
+            if (!(C2(k, k) <= 4.0 * C(k, k)))
+            {
+              C.row(k).setConstant(std::numeric_limits<double>::quiet_NaN());
+              C.col(k).setConstant(std::numeric_limits<double>::quiet_NaN());
+              out.message = "some intrinsics are not observable from these views";
+            }
+          }
           const Eigen::MatrixXd& J          = params[c]->jacobian();
           out.free_intrinsics_covariance[c] = C;
           out.intrinsics_covariance[c]      = J * C * J.transpose();
@@ -859,6 +897,27 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
     if (problem.cameras[cameraOf(pi)].project(pc, px))
     {
       out.residuals[o] = (px - ob.pixel).norm();
+    }
+  }
+  if (out.success)
+  {
+    // The optimizer can lower its cost by pushing badly fitting observations
+    // beyond the model's valid range (they then pay a constant penalty with
+    // a zero gradient): refuse such solutions.
+    int still = 0;
+    for (const size_t o : admitted)
+    {
+      if (std::isfinite(out.residuals[o]))
+      {
+        ++still;
+      }
+    }
+    const int lost = projectable - still;
+    if (lost > std::max(2, static_cast<int>(0.005 * projectable)))
+    {
+      out.success = false;
+      out.message = "the solution moved " + std::to_string(lost) +
+                    " observations out of the camera model's valid range";
     }
   }
   if (out.success &&

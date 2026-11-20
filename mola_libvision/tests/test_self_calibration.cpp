@@ -406,20 +406,38 @@ TEST(SelfCalibration, FocalSweepRejectsMismatchedPairs)
   EXPECT_FALSE(estimateFocalByTwoViewConsensus({m}, fo).valid);
 }
 
-TEST(SelfCalibration, IntrinsicsPriorHoldsPoorlyConstrainedFocal)
+TEST(SelfCalibration, IntrinsicsPriorHoldsTheFocal)
 {
-  // Two views, little rotation: the focal is weak; a tight prior keeps it.
+  // Fixed true poses and points: without a prior the focal moves to the
+  // truth (500); a tight prior keeps the wrong initial value (550).
   const auto              gt   = CameraModel::Pinhole(640, 480, 500, 500, 319.5, 239.5);
-  const auto              s    = makeSequence(gt, 3, 300, 0.3, 41, 1.0, 0.5);
+  const auto              s    = makeSequence(gt, 6, 300, 0.1, 41, 15.0, 1.0);
   const auto              init = CameraModel::Pinhole(640, 480, 550, 550, 319.5, 239.5);
-  auto                    p    = perturbedProblem(s, init, 7, 0.0, 0.0, 0.05);
+  BundleAdjustmentProblem base;
+  base.cameras      = {init};
+  base.poses        = s.poses;
+  base.points       = s.points;
+  base.observations = s.obs;
   BundleAdjustmentOptions o;
   IntrinsicsMask          m;
   m.fixed_aspect_ratio       = true;
   m.estimate_principal_point = false;
   o.intrinsics               = {m};
-  o.intrinsics_prior_sigmas  = {Eigen::VectorXd::Constant(1, 1e-3)};
-  const auto r               = bundleAdjust(p, o);
-  ASSERT_TRUE(r.success) << r.message;
-  EXPECT_NEAR(p.cameras[0].fx(), 550.0, 0.01);
+  o.fixed_poses.assign(base.poses.size(), true);
+  o.fix_points      = true;
+  auto       free_p = base;
+  const auto r1     = bundleAdjust(free_p, o);
+  ASSERT_TRUE(r1.success) << r1.message;
+  EXPECT_NEAR(free_p.cameras[0].fx(), 500.0, 0.5);
+
+  auto prior_p              = base;
+  o.intrinsics_prior_sigmas = {Eigen::VectorXd::Constant(1, 1e-3)};
+  const auto r2             = bundleAdjust(prior_p, o);
+  ASSERT_TRUE(r2.success) << r2.message;
+  EXPECT_NEAR(prior_p.cameras[0].fx(), 550.0, 0.01);
+
+  // A prior with the wrong number of sigmas is an error, not ignored.
+  o.intrinsics_prior_sigmas = {Eigen::VectorXd::Constant(2, 1.0)};
+  auto bad                  = base;
+  EXPECT_FALSE(bundleAdjust(bad, o).success);
 }

@@ -239,17 +239,42 @@ PnPResult mola::vision::solvePnPRansac(
   const PnPResult refined = solvePnP(Xin, zin, cam, init, params);
   result                  = refined;
   result.inliers.assign(N, false);
-  result.num_inliers      = 0;
-  const Eigen::Matrix3d R = refined.pose.getRotationMatrix().asEigen();
-  const Eigen::Vector3d t(refined.pose.x(), refined.pose.y(), refined.pose.z());
+  result.num_inliers = 0;
+  // Inliers, final cost and covariance over every original correspondence
+  // at the refined pose.
+  const Eigen::Matrix3d       R = refined.pose.getRotationMatrix().asEigen();
+  const Eigen::Vector3d       t(refined.pose.x(), refined.pose.y(), refined.pose.z());
+  Eigen::Matrix<double, 6, 6> info = Eigen::Matrix<double, 6, 6>::Zero();
+  double                      sq   = 0.0;
   for (size_t i = 0; i < N; ++i)
   {
-    Eigen::Vector2d px;
-    if (cam.project(R * worldPts[i] + t, px) &&
-        (px - pixels[i]).squaredNorm() < params.chi2_threshold)
+    const Eigen::Vector3d       p = R * worldPts[i] + t;
+    Eigen::Vector2d             px;
+    Eigen::Matrix<double, 2, 3> Jp;
+    if (!cam.project(p, px, &Jp))
+    {
+      continue;
+    }
+    const double e2 = (px - pixels[i]).squaredNorm();
+    if (e2 < params.chi2_threshold)
     {
       result.inliers[i] = true;
       ++result.num_inliers;
+      sq += e2;
+      Eigen::Matrix<double, 3, 6> Jx;
+      Jx.leftCols<3>()                    = -skew(p);
+      Jx.rightCols<3>()                   = Eigen::Matrix3d::Identity();
+      const Eigen::Matrix<double, 2, 6> J = Jp * Jx;
+      info += J.transpose() * J;
+    }
+  }
+  result.final_cost = static_cast<float>(0.5 * sq);
+  if (result.num_inliers >= 3)
+  {
+    Eigen::FullPivLU<Eigen::Matrix<double, 6, 6>> lu(info);
+    if (lu.isInvertible())
+    {
+      result.covariance = lu.inverse();
     }
   }
   return result;
