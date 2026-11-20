@@ -7,8 +7,11 @@
 #include <mrpt/core/exceptions.h>
 
 #include <Eigen/Dense>
+#include <Eigen/Eigenvalues>
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <vector>
 
 using namespace mola::vision;
 
@@ -17,9 +20,6 @@ namespace
 // Below this distance to the optical axis (relative to the depth), the
 // equidistant mapping is evaluated with its pinhole limit.
 constexpr double kSmallRadius = 1e-10;
-
-// Number of samples used to check the monotonicity of the radial mapping.
-constexpr int kMonotonicSamples = 16;
 
 // Radial derivative of the RadTan mapping as a function of s = r^2:
 // d/dr [ r (1 + k1 r^2 + k2 r^4 + k3 r^6) ] = 1 + 3 k1 s + 5 k2 s^2 + 7 k3 s^3
@@ -41,20 +41,40 @@ double equidistantDerivative(const Eigen::VectorXd& p, double t)
   return 1.0 + t * (3.0 * k1 + t * (5.0 * k2 + t * (7.0 * k3 + t * 9.0 * k4)));
 }
 
-// Checks that f(x) > 0 on [0, x_max] by dense sampling (the functions are
-// low-degree polynomials, so a few samples catch any fold in practice).
-template <typename F>
-bool positiveOn(F f, double x_max)
+/** Smallest positive real root of the polynomial with ascending coefficients
+ *  c; +infinity if there is none. For the radial derivatives below, c[0] = 1,
+ *  so this root ends the monotonic branch connected to the optical axis. */
+double firstPositiveRoot(std::vector<double> c)
 {
-  for (int i = 1; i <= kMonotonicSamples; ++i)
+  double best = std::numeric_limits<double>::infinity();
+  while (c.size() > 1 && c.back() == 0.0)
   {
-    const double x = x_max * static_cast<double>(i) / kMonotonicSamples;
-    if (f(x) <= 0.0)
+    c.pop_back();
+  }
+  const int n = static_cast<int>(c.size()) - 1;
+  if (n < 1)
+  {
+    return best;
+  }
+  Eigen::MatrixXd C = Eigen::MatrixXd::Zero(n, n);
+  for (int i = 0; i < n; ++i)
+  {
+    C(0, i) = -c[static_cast<size_t>(n - 1 - i)] / c[static_cast<size_t>(n)];
+  }
+  for (int i = 1; i < n; ++i)
+  {
+    C(i, i - 1) = 1.0;
+  }
+  const Eigen::EigenSolver<Eigen::MatrixXd> es(C, false);
+  for (int i = 0; i < n; ++i)
+  {
+    const auto z = es.eigenvalues()[i];
+    if (std::abs(z.imag()) <= 1e-9 * std::max(1.0, std::abs(z.real())) && z.real() > 0.0)
     {
-      return false;
+      best = std::min(best, z.real());
     }
   }
-  return true;
+  return best;
 }
 
 // Distortion of normalized coordinates (RadTan) with its 2x2 Jacobian.
@@ -226,6 +246,26 @@ void CameraModel::setParams(const Eigen::VectorXd& params)
 {
   ASSERT_EQUAL_(static_cast<int>(params.size()), NumParams(type_));
   params_ = params;
+  updateMonotonicLimit();
+}
+
+void CameraModel::updateMonotonicLimit()
+{
+  switch (type_)
+  {
+    case CameraModelType::RadTan:
+      monotonic_limit_ =
+          firstPositiveRoot({1.0, 3.0 * params_[4], 5.0 * params_[5], 7.0 * params_[8]});
+      break;
+    case CameraModelType::Equidistant:
+      monotonic_limit_ = firstPositiveRoot(
+          {1.0, 3.0 * params_[4], 5.0 * params_[5], 7.0 * params_[6], 9.0 * params_[7]});
+      break;
+    case CameraModelType::Pinhole:
+    default:
+      monotonic_limit_ = std::numeric_limits<double>::infinity();
+      break;
+  }
 }
 
 Eigen::VectorXd CameraModel::distortion() const
@@ -257,45 +297,28 @@ bool CameraModel::isMonotonicAt(double incidence_angle) const
         return false;
       }
       const double r = std::tan(incidence_angle);
-      return positiveOn([&](double s) { return radTanRadialDerivative(params_, s); }, r * r);
+      return r * r < monotonic_limit_;
     }
     case CameraModelType::Equidistant:
-    {
-      if (incidence_angle >= M_PI)
-      {
-        return false;
-      }
-      return positiveOn(
-          [&](double t) { return equidistantDerivative(params_, t); },
-          incidence_angle * incidence_angle);
-    }
+      return incidence_angle < M_PI && incidence_angle * incidence_angle < monotonic_limit_;
   }
   return false;
 }
 
 double CameraModel::maxIncidenceAngle() const
 {
-  const double limit = (type_ == CameraModelType::Equidistant) ? M_PI : M_PI_2;
-  // Bisection on the first angle where the mapping stops being monotonic.
-  double lo = 0.0;
-  double hi = limit * (1.0 - 1e-9);
-  if (isMonotonicAt(hi))
+  switch (type_)
   {
-    return hi;
+    case CameraModelType::RadTan:
+      return std::isfinite(monotonic_limit_) ? std::atan(std::sqrt(monotonic_limit_))
+                                             : M_PI_2 * (1.0 - 1e-9);
+    case CameraModelType::Equidistant:
+      return std::isfinite(monotonic_limit_) ? std::min(M_PI, std::sqrt(monotonic_limit_))
+                                             : M_PI * (1.0 - 1e-9);
+    case CameraModelType::Pinhole:
+    default:
+      return M_PI_2 * (1.0 - 1e-9);
   }
-  for (int it = 0; it < 60; ++it)
-  {
-    const double mid = 0.5 * (lo + hi);
-    if (isMonotonicAt(mid))
-    {
-      lo = mid;
-    }
-    else
-    {
-      hi = mid;
-    }
-  }
-  return lo;
 }
 
 bool CameraModel::project(
@@ -324,7 +347,7 @@ bool CameraModel::project(
     if (type_ == CameraModelType::RadTan)
     {
       const double r2 = x * x + y * y;
-      if (!positiveOn([&](double s) { return radTanRadialDerivative(params_, s); }, r2))
+      if (r2 >= monotonic_limit_)
       {
         return false;
       }
@@ -378,7 +401,7 @@ bool CameraModel::project(
     return false;
   }
   const double theta = std::atan2(r, Z);
-  if (!positiveOn([&](double t) { return equidistantDerivative(params_, t); }, theta * theta))
+  if (theta * theta >= monotonic_limit_)
   {
     return false;
   }
@@ -449,30 +472,109 @@ bool CameraModel::unproject(const Eigen::Vector2d& pixel, Eigen::Vector3d& beari
     return true;
   }
 
+  // Inverts a monotonic increasing radial function f on [0, x_max) by
+  // bracketed (safeguarded) Newton iteration: never leaves the branch
+  // connected to the optical axis.
+  auto invertRadial = [](const auto& f, const auto& df, double target, double x_max,
+                         double& x) -> bool
+  {
+    double lo = 0.0;
+    double hi = x_max;
+    if (!std::isfinite(hi))
+    {
+      hi = std::max(1.0, target);
+      for (int k = 0; k < 60 && f(hi) < target; ++k)
+      {
+        lo = hi;
+        hi *= 2.0;
+      }
+    }
+    if (f(hi) < target)
+    {
+      return false;  // beyond the largest value the valid branch reaches
+    }
+    x = std::clamp(target, lo, hi);
+    for (int it = 0; it < 100; ++it)
+    {
+      const double v = f(x) - target;
+      if (std::abs(v) < 1e-14 * std::max(1.0, target))
+      {
+        return true;
+      }
+      if (v > 0.0)
+      {
+        hi = x;
+      }
+      else
+      {
+        lo = x;
+      }
+      const double d  = df(x);
+      double       xn = d > 0.0 ? x - v / d : 0.5 * (lo + hi);
+      if (!(xn > lo && xn < hi))
+      {
+        xn = 0.5 * (lo + hi);
+      }
+      x = xn;
+      if (hi - lo < 1e-15 * std::max(1.0, hi))
+      {
+        return true;
+      }
+    }
+    return std::abs(f(x) - target) < 1e-10 * std::max(1.0, target);
+  };
+
   if (type_ == CameraModelType::RadTan)
   {
-    // Newton iteration on distort(x, y) = (xd, yd).
-    double x         = xd;
-    double y         = yd;
-    bool   converged = false;
+    const double k1 = params_[4];
+    const double k2 = params_[5];
+    const double k3 = params_[8];
+    // Radial-only inverse as the starting point, on the valid branch.
+    const double rd    = std::hypot(xd, yd);
+    const double r_max = std::sqrt(monotonic_limit_);
+    auto         f     = [&](double r)
+    {
+      const double s = r * r;
+      return r * (1.0 + s * (k1 + s * (k2 + s * k3)));
+    };
+    auto   df = [&](double r) { return radTanRadialDerivative(params_, r * r); };
+    double r  = 0.0;
+    if (rd > 0.0 && !invertRadial(f, df, rd, r_max, r))
+    {
+      return false;
+    }
+    double x = rd > 0.0 ? xd * r / rd : 0.0;
+    double y = rd > 0.0 ? yd * r / rd : 0.0;
+    // Newton on the full model (tangential terms), kept on the valid branch.
+    bool converged = false;
     for (int it = 0; it < 40; ++it)
     {
-      double          fx_ = 0;
-      double          fy_ = 0;
+      double          ex = 0;
+      double          ey = 0;
       Eigen::Matrix2d J;
-      radTanDistort(params_, x, y, fx_, fy_, &J);
-      const Eigen::Vector2d err(fx_ - xd, fy_ - yd);
+      radTanDistort(params_, x, y, ex, ey, &J);
+      const Eigen::Vector2d err(ex - xd, ey - yd);
       if (err.norm() < 1e-12)
       {
         converged = true;
         break;
       }
-      const double det = J.determinant();
-      if (std::abs(det) < 1e-12)
+      if (std::abs(J.determinant()) < 1e-12)
       {
         return false;
       }
-      const Eigen::Vector2d step = J.inverse() * err;
+      Eigen::Vector2d step = J.inverse() * err;
+      // Halve the step while it would leave the monotonic region.
+      for (int h = 0; h < 30; ++h)
+      {
+        const double nx = x - step.x();
+        const double ny = y - step.y();
+        if (nx * nx + ny * ny < monotonic_limit_)
+        {
+          break;
+        }
+        step *= 0.5;
+      }
       x -= step.x();
       y -= step.y();
       if (!std::isfinite(x) || !std::isfinite(y))
@@ -482,17 +584,12 @@ bool CameraModel::unproject(const Eigen::Vector2d& pixel, Eigen::Vector3d& beari
     }
     if (!converged)
     {
-      double fx_ = 0;
-      double fy_ = 0;
-      radTanDistort(params_, x, y, fx_, fy_);
-      converged = std::hypot(fx_ - xd, fy_ - yd) < 1e-9;
+      double ex = 0;
+      double ey = 0;
+      radTanDistort(params_, x, y, ex, ey);
+      converged = std::hypot(ex - xd, ey - yd) < 1e-9;
     }
-    if (!converged)
-    {
-      return false;
-    }
-    const double r2 = x * x + y * y;
-    if (!positiveOn([&](double s) { return radTanRadialDerivative(params_, s); }, r2))
+    if (!converged || x * x + y * y >= monotonic_limit_)
     {
       return false;
     }
@@ -500,37 +597,22 @@ bool CameraModel::unproject(const Eigen::Vector2d& pixel, Eigen::Vector3d& beari
     return true;
   }
 
-  // Equidistant: solve theta_d(theta) = |m| by Newton.
+  // Equidistant: theta_d(theta) = |m| on [0, min(pi, fold)).
   const double td = std::hypot(xd, yd);
   if (td < 1e-15)
   {
     bearing = Eigen::Vector3d(0.0, 0.0, 1.0);
     return true;
   }
-  double theta     = td;
-  bool   converged = false;
-  for (int it = 0; it < 40; ++it)
+  const double theta_max = std::min(M_PI, std::sqrt(monotonic_limit_));
+  double       theta     = 0.0;
+  if (!invertRadial(
+          [&](double th) { return equidistantThetaD(params_, th); },
+          [&](double th) { return equidistantDerivative(params_, th * th); }, td, theta_max, theta))
   {
-    const double f  = equidistantThetaD(params_, theta) - td;
-    const double df = equidistantDerivative(params_, theta * theta);
-    if (std::abs(f) < 1e-13)
-    {
-      converged = true;
-      break;
-    }
-    if (df <= 1e-12)
-    {
-      return false;
-    }
-    theta -= f / df;
-    theta = std::clamp(theta, 0.0, M_PI);
+    return false;
   }
-  if (!converged)
-  {
-    converged = std::abs(equidistantThetaD(params_, theta) - td) < 1e-10;
-  }
-  if (!converged || theta >= M_PI ||
-      !positiveOn([&](double t) { return equidistantDerivative(params_, t); }, theta * theta))
+  if (theta >= M_PI)
   {
     return false;
   }

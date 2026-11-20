@@ -329,3 +329,18 @@ TEST(RobustEstimators, HomographyFundamentalRotation)
   const auto he = estimateHomography(p1, p2, of);
   EXPECT_LT(he.report.num_inliers, 60);
 }
+
+TEST(MinimalSolvers, P3PDegenerateLabeling)
+{
+  // Bearings and points on the coordinate axes: the elimination denominator
+  // vanishes in the first labeling; the identity pose must still be found.
+  const Eigen::Vector3d b[3] = {
+      Eigen::Vector3d::UnitX(), Eigen::Vector3d::UnitY(), Eigen::Vector3d::UnitZ()};
+  const auto sols = solveP3P(b, b);
+  double     best = 1e9;
+  for (const auto& p : sols)
+  {
+    best = std::min(best, (p.R - Eigen::Matrix3d::Identity()).norm() + p.t.norm());
+  }
+  EXPECT_LT(best, 1e-6);
+}

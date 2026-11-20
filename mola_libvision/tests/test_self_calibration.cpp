@@ -350,3 +350,57 @@ TEST(SelfCalibration, RotationOnlyWithPointsAtInfinity)
   ASSERT_EQ(r.free_intrinsics_covariance.size(), 1u);
   EXPECT_EQ(r.free_intrinsics_covariance[0].rows(), 5);
 }
+
+TEST(SelfCalibration, BundleAdjustmentValidatesInputs)
+{
+  const auto              cam = CameraModel::Pinhole(640, 480, 500, 500, 320, 240);
+  BundleAdjustmentProblem p;
+  p.cameras = {cam};
+  p.poses   = {mrpt::poses::CPose3D(), mrpt::poses::CPose3D(1, 0, 0, 0, 0, 0)};
+  p.points  = {Eigen::Vector3d(0, 0, 5), Eigen::Vector3d(1, 0, 5)};
+  for (int i = 0; i < 2; ++i)
+  {
+    for (int j = 0; j < 2; ++j)
+    {
+      BAObservationPx o;
+      o.pose  = i;
+      o.point = j;
+      Eigen::Vector2d px;
+      const auto&     P = p.poses[static_cast<size_t>(i)];
+      cam.project(rotOf(P) * p.points[static_cast<size_t>(j)] + trOf(P), px);
+      o.pixel = px;
+      p.observations.push_back(o);
+    }
+  }
+  BundleAdjustmentOptions o;
+  auto                    bad_cam = p;
+  bad_cam.pose_camera             = {1, 0};  // camera 1 does not exist
+  EXPECT_FALSE(bundleAdjust(bad_cam, o).success);
+  auto bad_mask              = p;
+  bad_mask.point_at_infinity = {false};  // wrong size
+  EXPECT_FALSE(bundleAdjust(bad_mask, o).success);
+
+  // Nothing projectable: fixed points behind fixed cameras, free intrinsics.
+  auto behind = p;
+  for (auto& X : behind.points)
+  {
+    X.z() = -5.0;
+  }
+  BundleAdjustmentOptions ob;
+  ob.fix_points  = true;
+  ob.fixed_poses = {true, true};
+  IntrinsicsMask m;
+  ob.intrinsics = {m};
+  EXPECT_FALSE(bundleAdjust(behind, ob).success);
+}
+
+TEST(SelfCalibration, FocalSweepRejectsMismatchedPairs)
+{
+  FocalSweepOptions fo;
+  fo.model  = CameraModelType::Pinhole;
+  fo.width  = 640;
+  fo.height = 480;
+  ViewPairMatches m;
+  m.p1 = {Eigen::Vector2d(1, 2)};
+  EXPECT_FALSE(estimateFocalByTwoViewConsensus({m}, fo).valid);
+}

@@ -301,47 +301,194 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
     out.message = "empty problem";
     return out;
   }
+  // Validate the optional per-pose and per-point maps.
+  if (!problem.pose_camera.empty())
+  {
+    if (problem.pose_camera.size() != nPoses)
+    {
+      out.message = "pose_camera must be empty or have one entry per pose";
+      return out;
+    }
+    for (const int c : problem.pose_camera)
+    {
+      if (c < 0 || static_cast<size_t>(c) >= nCameras)
+      {
+        out.message = "pose_camera refers to a camera that does not exist";
+        return out;
+      }
+    }
+  }
+  if (!problem.point_at_infinity.empty() && problem.point_at_infinity.size() != nPoints)
+  {
+    out.message = "point_at_infinity must be empty or have one entry per point";
+    return out;
+  }
   auto cameraOf = [&](size_t pose) -> size_t
   { return problem.pose_camera.empty() ? 0 : static_cast<size_t>(problem.pose_camera[pose]); };
-  auto atInf = [&](size_t pt)
-  { return !problem.point_at_infinity.empty() && problem.point_at_infinity[pt]; };
 
-  // Which variables exist.
-  std::vector<bool> pose_fixed(nPoses, false);
-  bool              any_fixed = false;
-  for (size_t i = 0; i < nPoses && i < options.fixed_poses.size(); ++i)
-  {
-    pose_fixed[i] = options.fixed_poses[i];
-    any_fixed     = any_fixed || pose_fixed[i];
-  }
   std::vector<gtsam::Pose3> T_wc(nPoses);
   for (size_t i = 0; i < nPoses; ++i)
   {
     T_wc[i] = toGtsam(-problem.poses[i]);
   }
 
+  // Observations that take part: valid indices and, for variable points, at
+  // least two of them (a single observation is always matched exactly by
+  // moving the point: no information, and an undetermined depth).
+  std::vector<int> obs_count(nPoints, 0);
+  for (const auto& ob : problem.observations)
+  {
+    if (ob.point >= 0 && static_cast<size_t>(ob.point) < nPoints && ob.pose >= 0 &&
+        static_cast<size_t>(ob.pose) < nPoses)
+    {
+      ++obs_count[static_cast<size_t>(ob.point)];
+    }
+  }
+  std::vector<size_t> admitted;
+  for (size_t o = 0; o < problem.observations.size(); ++o)
+  {
+    const auto& ob = problem.observations[o];
+    if (ob.pose < 0 || ob.point < 0 || static_cast<size_t>(ob.pose) >= nPoses ||
+        static_cast<size_t>(ob.point) >= nPoints)
+    {
+      continue;
+    }
+    if (!options.fix_points && obs_count[static_cast<size_t>(ob.point)] < 2)
+    {
+      continue;
+    }
+    admitted.push_back(o);
+  }
+
+  // Points handled as directions: those given at infinity, and, in
+  // rotation-only mode, finite variable points whose observing centers
+  // coincide (their depth is unobservable): those keep their range.
+  std::vector<bool>            inf(nPoints, false);
+  std::vector<double>          keep_range(nPoints, -1.0);
+  std::vector<Eigen::Vector3d> range_center(nPoints, Eigen::Vector3d::Zero());
+  for (size_t j = 0; j < nPoints; ++j)
+  {
+    inf[j] = !problem.point_at_infinity.empty() && problem.point_at_infinity[j];
+  }
+  if (options.rotation_only && !options.fix_points)
+  {
+    std::vector<int>  first_pose(nPoints, -1);
+    std::vector<bool> common(nPoints, true);
+    for (const size_t o : admitted)
+    {
+      const auto pi = static_cast<size_t>(problem.observations[o].pose);
+      const auto li = static_cast<size_t>(problem.observations[o].point);
+      if (inf[li])
+      {
+        continue;
+      }
+      if (first_pose[li] < 0)
+      {
+        first_pose[li] = static_cast<int>(pi);
+      }
+      else if (
+          (T_wc[pi].translation() - T_wc[static_cast<size_t>(first_pose[li])].translation())
+              .norm() > 1e-9)
+      {
+        common[li] = false;
+      }
+    }
+    for (size_t j = 0; j < nPoints; ++j)
+    {
+      if (first_pose[j] >= 0 && common[j])
+      {
+        const Eigen::Vector3d C = T_wc[static_cast<size_t>(first_pose[j])].translation();
+        const double          r = (problem.points[j] - C).norm();
+        if (r > 0.0)
+        {
+          inf[j]          = true;
+          keep_range[j]   = r;
+          range_center[j] = C;
+        }
+      }
+    }
+  }
+  // Direction of a point handled at infinity.
+  auto direction = [&](size_t j) -> Eigen::Vector3d
+  {
+    if (keep_range[j] > 0.0)
+    {
+      return (problem.points[j] - range_center[j]).normalized();
+    }
+    return problem.points[j].normalized();
+  };
+
+  // Which poses take part, and which have finite points to fix their center.
+  std::vector<bool> pose_obs(nPoses, false);
+  std::vector<bool> pose_finite(nPoses, false);
+  for (const size_t o : admitted)
+  {
+    const auto pi   = static_cast<size_t>(problem.observations[o].pose);
+    const auto li   = static_cast<size_t>(problem.observations[o].point);
+    pose_obs[pi]    = true;
+    pose_finite[pi] = pose_finite[pi] || !inf[li];
+  }
+
+  std::vector<bool> pose_fixed(nPoses, false);
+  bool              any_fixed = false;
+  for (size_t i = 0; i < nPoses && i < options.fixed_poses.size(); ++i)
+  {
+    pose_fixed[i] = options.fixed_poses[i];
+    any_fixed     = any_fixed || (pose_fixed[i] && pose_obs[i]);
+  }
+
+  // Automatic gauge, anchored on poses that take part.
   const bool gauge_free = !any_fixed && !options.fix_points;
+  int        anchor     = -1;
   int        scale_pose = -1;
   if (gauge_free && options.fix_gauge)
   {
-    pose_fixed[0] = true;
-    if (!options.rotation_only)
+    for (size_t i = 0; i < nPoses && anchor < 0; ++i)
     {
-      double best = 0.0;
-      for (size_t i = 1; i < nPoses; ++i)
+      if (pose_obs[i])
       {
-        const double d = (T_wc[i].translation() - T_wc[0].translation()).norm();
-        if (d > best)
-        {
-          best       = d;
-          scale_pose = static_cast<int>(i);
-        }
-      }
-      if (best < 1e-12)
-      {
-        scale_pose = -1;
+        anchor = static_cast<int>(i);
       }
     }
+    if (anchor >= 0)
+    {
+      pose_fixed[static_cast<size_t>(anchor)] = true;
+      if (!options.rotation_only)
+      {
+        const Eigen::Vector3d C0   = T_wc[static_cast<size_t>(anchor)].translation();
+        double                best = 0.0;
+        for (size_t i = 0; i < nPoses; ++i)
+        {
+          if (!pose_finite[i] || static_cast<int>(i) == anchor)
+          {
+            continue;
+          }
+          const double d = (T_wc[i].translation() - C0).norm();
+          if (d > best)
+          {
+            best       = d;
+            scale_pose = static_cast<int>(i);
+          }
+        }
+        if (best < 1e-12)
+        {
+          scale_pose = -1;
+        }
+      }
+    }
+  }
+
+  // Pose variable type: a pose whose observations are all directions has an
+  // unconstrained center, so only its rotation is estimated.
+  std::vector<PoseVar> pose_var(nPoses, PoseVar::Constant);
+  for (size_t i = 0; i < nPoses; ++i)
+  {
+    if (pose_fixed[i] || !pose_obs[i])
+    {
+      continue;
+    }
+    pose_var[i] =
+        (options.rotation_only || !pose_finite[i]) ? PoseVar::RotationOnly : PoseVar::Full;
   }
 
   std::vector<std::shared_ptr<const IntrinsicsParameterization>> params(nCameras);
@@ -358,55 +505,31 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
     }
   }
 
-  // A variable point needs two observations: a single one is always matched
-  // exactly by moving the point, adds no information, and leaves its depth
-  // undetermined (a singular system for the covariance).
-  std::vector<int> obs_count(nPoints, 0);
-  for (const auto& ob : problem.observations)
-  {
-    if (ob.point >= 0 && static_cast<size_t>(ob.point) < nPoints && ob.pose >= 0 &&
-        static_cast<size_t>(ob.pose) < nPoses)
-    {
-      ++obs_count[static_cast<size_t>(ob.point)];
-    }
-  }
-
   gtsam::NonlinearFactorGraph graph;
   gtsam::Values               values;
   std::vector<bool>           pose_used(nPoses, false);
   std::vector<bool>           point_used(nPoints, false);
   std::vector<bool>           cam_used(nCameras, false);
+  int                         projectable = 0;
 
-  for (const auto& ob : problem.observations)
+  for (const size_t o : admitted)
   {
-    if (ob.pose < 0 || ob.point < 0 || static_cast<size_t>(ob.pose) >= nPoses ||
-        static_cast<size_t>(ob.point) >= nPoints)
-    {
-      continue;
-    }
-    const auto pi = static_cast<size_t>(ob.pose);
-    const auto li = static_cast<size_t>(ob.point);
-    const auto ci = cameraOf(pi);
-    if (!options.fix_points && obs_count[li] < 2)
-    {
-      continue;
-    }
+    const auto& ob = problem.observations[o];
+    const auto  pi = static_cast<size_t>(ob.pose);
+    const auto  li = static_cast<size_t>(ob.point);
+    const auto  ci = cameraOf(pi);
 
     CalibReprojectionFactor::Setup s;
     gtsam::KeyVector               keys;
-    if (!pose_fixed[pi])
+    s.pose_var = pose_var[pi];
+    if (s.pose_var != PoseVar::Constant)
     {
-      s.pose_var = options.rotation_only ? PoseVar::RotationOnly : PoseVar::Full;
       keys.push_back(poseKey(pi));
       pose_used[pi] = true;
     }
-    else
-    {
-      s.pose_var = PoseVar::Constant;
-    }
     s.pose_const        = T_wc[pi];
-    s.point_at_infinity = atInf(li);
-    s.point_const       = problem.points[li];
+    s.point_at_infinity = inf[li];
+    s.point_const       = inf[li] ? direction(li) : problem.points[li];
     s.point_var         = !options.fix_points;
     if (s.point_var)
     {
@@ -427,7 +550,24 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
     {
       continue;
     }
+    // At least one observation must be projectable at the start, or the
+    // optimizer would see only constant penalties.
+    {
+      const Eigen::Vector3d pc =
+          inf[li] ? Eigen::Vector3d(T_wc[pi].rotation().unrotate(gtsam::Point3(s.point_const)))
+                  : Eigen::Vector3d(T_wc[pi].transformTo(s.point_const));
+      Eigen::Vector2d px;
+      if (s.camera.project(pc, px))
+      {
+        ++projectable;
+      }
+    }
     graph.emplace_shared<CalibReprojectionFactor>(makeNoise(ob.sigma, options), keys, s);
+  }
+  if (!graph.empty() && projectable == 0)
+  {
+    out.message = "no observation can be projected with the initial values";
+    return out;
   }
 
   for (size_t i = 0; i < nPoses; ++i)
@@ -436,7 +576,7 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
     {
       continue;
     }
-    if (options.rotation_only)
+    if (pose_var[i] == PoseVar::RotationOnly)
     {
       values.insert(poseKey(i), T_wc[i].rotation());
     }
@@ -451,9 +591,9 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
     {
       continue;
     }
-    if (atInf(j))
+    if (inf[j])
     {
-      values.insert(pointKey(j), gtsam::Unit3(gtsam::Point3(problem.points[j])));
+      values.insert(pointKey(j), gtsam::Unit3(gtsam::Point3(direction(j))));
     }
     else
     {
@@ -469,31 +609,37 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
       intr_keys.push_back(intrKey(c));
     }
   }
-  for (const auto& [a, b] : options.scale_constraints)
+  // Scale constraints act on camera centers: only for full pose variables.
+  auto addScale = [&](size_t ka, size_t kb)
   {
-    if (a < 0 || b < 0 || static_cast<size_t>(a) >= nPoses || static_cast<size_t>(b) >= nPoses ||
-        !pose_fixed[static_cast<size_t>(a)] || !pose_used[static_cast<size_t>(b)])
+    if (!pose_used[kb] || pose_var[kb] != PoseVar::Full)
     {
-      continue;
+      return;
     }
-    const auto   ka = static_cast<size_t>(a);
-    const auto   kb = static_cast<size_t>(b);
     const double d0 = (T_wc[kb].translation() - T_wc[ka].translation()).norm();
     if (d0 < 1e-12)
     {
-      continue;
+      return;
     }
     graph.emplace_shared<CenterDistanceFactor>(
         gtsam::noiseModel::Isotropic::Sigma(1, 1e-4 * d0), poseKey(kb),
         Eigen::Vector3d(T_wc[ka].translation()), d0);
-  }
-  if (scale_pose >= 0 && pose_used[static_cast<size_t>(scale_pose)])
+  };
+  if (!options.rotation_only)
   {
-    const auto   k  = static_cast<size_t>(scale_pose);
-    const double d0 = (T_wc[k].translation() - T_wc[0].translation()).norm();
-    graph.emplace_shared<CenterDistanceFactor>(
-        gtsam::noiseModel::Isotropic::Sigma(1, 1e-4 * d0), poseKey(k),
-        Eigen::Vector3d(T_wc[0].translation()), d0);
+    for (const auto& [a, b] : options.scale_constraints)
+    {
+      if (a < 0 || b < 0 || static_cast<size_t>(a) >= nPoses || static_cast<size_t>(b) >= nPoses ||
+          !pose_fixed[static_cast<size_t>(a)])
+      {
+        continue;
+      }
+      addScale(static_cast<size_t>(a), static_cast<size_t>(b));
+    }
+    if (scale_pose >= 0 && anchor >= 0)
+    {
+      addScale(static_cast<size_t>(anchor), static_cast<size_t>(scale_pose));
+    }
   }
 
   if (graph.empty() || values.empty())
@@ -531,7 +677,7 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
         continue;
       }
       gtsam::Pose3 T;
-      if (options.rotation_only)
+      if (pose_var[i] == PoseVar::RotationOnly)
       {
         T = gtsam::Pose3(result.at<gtsam::Rot3>(poseKey(i)), T_wc[i].translation());
       }
@@ -547,9 +693,11 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
       {
         continue;
       }
-      if (atInf(j))
+      if (inf[j])
       {
-        problem.points[j] = result.at<gtsam::Unit3>(pointKey(j)).unitVector();
+        const Eigen::Vector3d d = result.at<gtsam::Unit3>(pointKey(j)).unitVector();
+        problem.points[j] =
+            keep_range[j] > 0.0 ? Eigen::Vector3d(range_center[j] + keep_range[j] * d) : d;
       }
       else
       {
@@ -579,9 +727,11 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
           std::vector<double> d;
           for (size_t j = 0; j < nPoints; ++j)
           {
-            if (point_used[j] && !atInf(j))
+            if (point_used[j] && !inf[j])
             {
-              d.push_back((problem.points[j] - T_wc[0].translation()).norm());
+              d.push_back((problem.points[j] -
+                           T_wc[anchor >= 0 ? static_cast<size_t>(anchor) : 0].translation())
+                              .norm());
             }
           }
           if (!d.empty())
@@ -599,7 +749,7 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
           {
             continue;
           }
-          if (options.rotation_only)
+          if (pose_var[i] == PoseVar::RotationOnly)
           {
             cov_graph.emplace_shared<gtsam::PriorFactor<gtsam::Rot3>>(
                 poseKey(i), result.at<gtsam::Rot3>(poseKey(i)),
@@ -620,7 +770,7 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
           {
             continue;
           }
-          if (atInf(j))
+          if (inf[j])
           {
             cov_graph.emplace_shared<gtsam::PriorFactor<gtsam::Unit3>>(
                 pointKey(j), result.at<gtsam::Unit3>(pointKey(j)),
@@ -688,13 +838,21 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
     const mrpt::poses::CPose3D& P  = problem.poses[pi];
     const Eigen::Matrix3d       R  = P.getRotationMatrix().asEigen();
     const Eigen::Vector3d       t(P.x(), P.y(), P.z());
-    const Eigen::Vector3d       pc = atInf(li) ? Eigen::Vector3d(R * problem.points[li])
-                                               : Eigen::Vector3d(R * problem.points[li] + t);
-    Eigen::Vector2d             px;
+    const bool given_inf     = !problem.point_at_infinity.empty() && problem.point_at_infinity[li];
+    const Eigen::Vector3d pc = given_inf ? Eigen::Vector3d(R * problem.points[li])
+                                         : Eigen::Vector3d(R * problem.points[li] + t);
+    Eigen::Vector2d       px;
     if (problem.cameras[cameraOf(pi)].project(pc, px))
     {
       out.residuals[o] = (px - ob.pixel).norm();
     }
+  }
+  if (out.success &&
+      std::none_of(
+          out.residuals.begin(), out.residuals.end(), [](double e) { return std::isfinite(e); }))
+  {
+    out.success = false;
+    out.message = "no observation can be projected with the solution";
   }
   return out;
 }

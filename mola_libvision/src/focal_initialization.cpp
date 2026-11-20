@@ -285,6 +285,13 @@ FocalEstimate mola::vision::estimateFocalByTwoViewConsensus(
   {
     return out;
   }
+  for (const auto& m : pairs)
+  {
+    if (m.p1.size() != m.p2.size())
+    {
+      return out;
+    }
+  }
   const double f_min = options.f_min > 0.0 ? options.f_min : defaultMinFocal(options);
   const double f_max = options.f_max > 0.0 ? options.f_max : defaultMaxFocal(options);
   const double tau   = options.threshold_px;
@@ -292,10 +299,12 @@ FocalEstimate mola::vision::estimateFocalByTwoViewConsensus(
   // Coarse, sampled cost. Keeps the inliers of each pair at each sample so
   // the fine search can refit deterministically.
   std::vector<std::vector<std::vector<bool>>> inliers_at;  // [sample][pair][match]
+  std::vector<int>                            support_at;  // [sample] pairs with a fitted model
   auto                                        coarse_cost = [&](double f)
   {
-    const CameraModel              cam   = sweepModel(options, f);
-    double                         total = 0.0;
+    int                            supported = 0;
+    const CameraModel              cam       = sweepModel(options, f);
+    double                         total     = 0.0;
     std::vector<std::vector<bool>> in_pairs;
     for (size_t k = 0; k < pairs.size(); ++k)
     {
@@ -331,6 +340,7 @@ FocalEstimate mola::vision::estimateFocalByTwoViewConsensus(
       }
       else
       {
+        ++supported;
         for (size_t i = 0; i < idx.size(); ++i)
         {
           const double e = pixelError(cam, M, b1[i], b2[i], options.rotation_only);
@@ -341,6 +351,7 @@ FocalEstimate mola::vision::estimateFocalByTwoViewConsensus(
       in_pairs.push_back(in);
     }
     inliers_at.push_back(in_pairs);
+    support_at.push_back(supported);
     return total;
   };
 
@@ -351,16 +362,29 @@ FocalEstimate mola::vision::estimateFocalByTwoViewConsensus(
     out.focals.push_back(f);
     out.costs.push_back(coarse_cost(f));
   }
-  const auto  best_it      = std::min_element(out.costs.begin(), out.costs.end());
-  const auto  best         = static_cast<size_t>(std::distance(out.costs.begin(), best_it));
+  // Best sample among those where some pair supported a model.
+  size_t best = out.costs.size();
+  for (size_t i = 0; i < out.costs.size(); ++i)
+  {
+    if (support_at[i] > 0 && (best == out.costs.size() || out.costs[i] < out.costs[best]))
+    {
+      best = i;
+    }
+  }
+  if (best == out.costs.size())
+  {
+    return out;  // no candidate focal had any model support
+  }
   const auto& best_inliers = inliers_at[best];
 
   // Fine search: deterministic refit on the best sample's inliers, so the
   // cost is a smooth function of the focal length.
-  auto fine_cost = [&](double f)
+  int  fine_supported = 0;
+  auto fine_cost      = [&](double f)
   {
     const CameraModel cam   = sweepModel(options, f);
     double            total = 0.0;
+    fine_supported          = 0;
     for (size_t k = 0; k < pairs.size(); ++k)
     {
       std::vector<Eigen::Vector3d> b1;
@@ -385,6 +409,7 @@ FocalEstimate mola::vision::estimateFocalByTwoViewConsensus(
         total += tau * tau * static_cast<double>(b1.size());
         continue;
       }
+      ++fine_supported;
       for (size_t i = 0; i < b1.size(); ++i)
       {
         const double e = pixelError(cam, *Mo, b1[i], b2[i], options.rotation_only);
@@ -396,9 +421,20 @@ FocalEstimate mola::vision::estimateFocalByTwoViewConsensus(
   const double  lo   = out.focals[best > 0 ? best - 1 : 0];
   const double  hi   = out.focals[std::min(best + 1, out.focals.size() - 1)];
   FocalEstimate fine = sweep(fine_cost, lo, hi, 9);
-  out.valid          = fine.valid || std::isfinite(*best_it);
-  out.focal          = fine.valid ? fine.focal : out.focals[best];
-  out.cost           = *best_it;
+  // Keep the coarse focal unless the deterministic refit is supported and
+  // does better than at the coarse focal itself.
+  out.valid = true;
+  out.focal = out.focals[best];
+  out.cost  = out.costs[best];
+  if (fine.valid)
+  {
+    const double at_coarse = fine_cost(out.focals[best]);
+    const double at_fine   = fine_cost(fine.focal);
+    if (fine_supported > 0 && at_fine <= at_coarse)
+    {
+      out.focal = fine.focal;
+    }
+  }
 
   std::vector<double> sorted = out.costs;
   const double        med    = median(sorted);
