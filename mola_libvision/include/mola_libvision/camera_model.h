@@ -9,6 +9,7 @@
 
 #include <Eigen/Core>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -139,6 +140,13 @@ class CameraModel
   uint32_t        width_  = 0;
   uint32_t        height_ = 0;
   Eigen::VectorXd params_ = Eigen::VectorXd::Zero(4);
+  /** End of the monotonic branch of the radial mapping connected to the
+   *  optical axis, in s = r^2 (RadTan, normalized radius) or t = theta^2
+   *  (Equidistant); infinity if the mapping never folds. Computed exactly
+   *  from the first positive root of the derivative whenever the parameters
+   *  change. */
+  double monotonic_limit_ = std::numeric_limits<double>::infinity();
+  void   updateMonotonicLimit();
 };
 
 /** Which intrinsic parameters are estimated, for calibration problems.

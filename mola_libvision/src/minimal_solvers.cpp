@@ -654,8 +654,10 @@ std::optional<AbsolutePose> mola::vision::alignPointSets(
   return out;
 }
 
-std::vector<AbsolutePose> mola::vision::solveP3P(
-    const Eigen::Vector3d bearings[3], const Eigen::Vector3d points[3])
+namespace
+{
+std::vector<AbsolutePose> p3pChart(
+    const Eigen::Vector3d bearings[3], const Eigen::Vector3d points[3], bool& degenerate)
 {
   const Eigen::Vector3d j1 = bearings[0].normalized();
   const Eigen::Vector3d j2 = bearings[1].normalized();
@@ -685,19 +687,14 @@ std::vector<AbsolutePose> mola::vision::solveP3P(
   quartic             = upolyAdd(quartic, upolyScale(upolyMul(q, D2), c2), -1.0);
 
   std::vector<AbsolutePose> out;
-  for (const double v : realRoots(quartic))
+  degenerate = false;
+  // With cos(alpha) = cos(gamma) = 0 the denominator vanishes identically and
+  // the quartic reduces to N(v)^2: take the roots of N directly.
+  const bool d_zero = std::abs(Dp[0]) + std::abs(Dp[1]) < 1e-12 * b2;
+  const auto roots  = d_zero ? realRoots(Np) : realRoots(quartic);
+  for (const double v : roots)
   {
     if (v <= 0.0)
-    {
-      continue;
-    }
-    const double den = upolyEval(Dp, v);
-    if (std::abs(den) < 1e-14)
-    {
-      continue;
-    }
-    const double u = upolyEval(Np, v) / den;
-    if (u <= 0.0)
     {
       continue;
     }
@@ -706,15 +703,80 @@ std::vector<AbsolutePose> mola::vision::solveP3P(
     {
       continue;
     }
-    const double s1 = std::sqrt(b2 / qv);
-    const double s2 = u * s1;
-    const double s3 = v * s1;
-
-    const std::vector<Eigen::Vector3d> P = {points[0], points[1], points[2]};
-    const std::vector<Eigen::Vector3d> Q = {s1 * j1, s2 * j2, s3 * j3};
-    if (const auto pose = alignPointSets(P, Q); pose)
+    // u from the elimination, or, where it is undetermined, from the (1, 2)
+    // equation (a quadratic in u) checked against the (2, 3) equation.
+    std::vector<double> us;
+    const double        den = upolyEval(Dp, v);
+    if (std::abs(den) > 1e-10 * b2)
     {
-      out.push_back(*pose);
+      us.push_back(upolyEval(Np, v) / den);
+    }
+    else
+    {
+      degenerate        = true;
+      const double disc = cg * cg - 1.0 + c2 * qv / b2;
+      if (disc >= 0.0)
+      {
+        for (const double u : {cg + std::sqrt(disc), cg - std::sqrt(disc)})
+        {
+          const double r = b2 * (u * u + v * v - 2.0 * u * v * ca) - a2 * qv;
+          if (std::abs(r) <= 1e-6 * std::max(a2 * qv, b2))
+          {
+            us.push_back(u);
+          }
+        }
+      }
+    }
+    for (const double u : us)
+    {
+      if (u <= 0.0)
+      {
+        continue;
+      }
+      const double s1 = std::sqrt(b2 / qv);
+      const double s2 = u * s1;
+      const double s3 = v * s1;
+
+      const std::vector<Eigen::Vector3d> P = {points[0], points[1], points[2]};
+      const std::vector<Eigen::Vector3d> Q = {s1 * j1, s2 * j2, s3 * j3};
+      if (const auto pose = alignPointSets(P, Q); pose)
+      {
+        out.push_back(*pose);
+      }
+    }
+  }
+  return out;
+}
+
+}  // namespace
+
+std::vector<AbsolutePose> mola::vision::solveP3P(
+    const Eigen::Vector3d bearings[3], const Eigen::Vector3d points[3])
+{
+  // The elimination divides by a term that vanishes for some configurations
+  // (e.g. symmetric ones); relabeling the points changes that term, so the
+  // other cyclic orders recover the lost solutions.
+  std::vector<AbsolutePose> out;
+  for (int shift = 0; shift < 3; ++shift)
+  {
+    const Eigen::Vector3d b[3] = {
+        bearings[shift], bearings[(shift + 1) % 3], bearings[(shift + 2) % 3]};
+    const Eigen::Vector3d X[3] = {points[shift], points[(shift + 1) % 3], points[(shift + 2) % 3]};
+    bool                  degenerate = false;
+    for (const auto& sol : p3pChart(b, X, degenerate))
+    {
+      const bool dup = std::any_of(
+          out.begin(), out.end(),
+          [&](const AbsolutePose& o)
+          { return (o.R - sol.R).norm() + (o.t - sol.t).norm() < 1e-9; });
+      if (!dup)
+      {
+        out.push_back(sol);
+      }
+    }
+    if (!degenerate)
+    {
+      break;
     }
   }
   return out;

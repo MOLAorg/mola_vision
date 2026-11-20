@@ -191,3 +191,26 @@ TEST(IntrinsicsParameterization, FreeVectorRoundTrip)
   EXPECT_NEAR(p.jacobian()(0, 0), 1.0, 1e-12);
   EXPECT_NEAR(p.jacobian()(1, 0), 510.0 / 500.0, 1e-12);
 }
+
+TEST(CameraModel, FoldFoundExactlyNotBySampling)
+{
+  // Radial derivative 1 - 3s + s^2 is negative for s in (0.382, 2.618): any
+  // point beyond the first fold must be rejected, even far beyond it.
+  const auto      cam = CameraModel::RadTan(640, 480, 300, 300, 320, 240, -1.0, 0.2, 0, 0, 0);
+  Eigen::Vector2d px;
+  EXPECT_FALSE(cam.project({8.0, 0.0, 1.0}, px));
+  const double s_fold = (3.0 - std::sqrt(5.0)) / 2.0;
+  EXPECT_NEAR(cam.maxIncidenceAngle(), std::atan(std::sqrt(s_fold)), 1e-9);
+}
+
+TEST(CameraModel, EquidistantInverseStaysOnValidBranch)
+{
+  const auto   cam = CameraModel::Equidistant(1280, 1024, 200, 200, 640, 512, 0.3, -0.05, 0, 0);
+  const double th  = 1.5;
+  const Eigen::Vector3d P(std::sin(th), 0.0, std::cos(th));
+  Eigen::Vector2d       px;
+  ASSERT_TRUE(cam.project(P, px));
+  Eigen::Vector3d b;
+  ASSERT_TRUE(cam.unproject(px, b));
+  EXPECT_NEAR(std::acos(b.z()), th, 1e-9);
+}

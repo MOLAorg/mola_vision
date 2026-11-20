@@ -218,7 +218,39 @@ PnPResult mola::vision::solvePnPRansac(
   }
   const mrpt::poses::CPose3D init = toCPose3D(est.pose.R, est.pose.t);
 
-  // Refine on all points: the Huber kernel and the final chi2 gate decide the
-  // inliers in pixel space.
-  return solvePnP(worldPts, pixels, cam, init, params);
+  // Refine on the MSAC consensus only, then classify every correspondence at
+  // the refined pose (outliers must not pull the refinement).
+  std::vector<Eigen::Vector3d> Xin;
+  std::vector<Eigen::Vector2d> zin;
+  for (size_t i = 0, k = 0; i < N; ++i)
+  {
+    Eigen::Vector3d bi;
+    if (!cam.unproject(pixels[i], bi))
+    {
+      continue;
+    }
+    if (est.report.inliers[k])
+    {
+      Xin.push_back(worldPts[i]);
+      zin.push_back(pixels[i]);
+    }
+    ++k;
+  }
+  const PnPResult refined = solvePnP(Xin, zin, cam, init, params);
+  result                  = refined;
+  result.inliers.assign(N, false);
+  result.num_inliers      = 0;
+  const Eigen::Matrix3d R = refined.pose.getRotationMatrix().asEigen();
+  const Eigen::Vector3d t(refined.pose.x(), refined.pose.y(), refined.pose.z());
+  for (size_t i = 0; i < N; ++i)
+  {
+    Eigen::Vector2d px;
+    if (cam.project(R * worldPts[i] + t, px) &&
+        (px - pixels[i]).squaredNorm() < params.chi2_threshold)
+    {
+      result.inliers[i] = true;
+      ++result.num_inliers;
+    }
+  }
+  return result;
 }
