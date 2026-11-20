@@ -89,11 +89,15 @@ TEST(MinimalSolvers, FivePointRecoversEssential)
     for (const auto& E : sols)
     {
       best = std::min(best, essentialDistance(E, trueEssential(s)));
-      // Every solution satisfies the five constraints.
+      // Every solution satisfies the five constraints and is an essential
+      // matrix: two equal singular values, the third zero.
       for (int i = 0; i < 5; ++i)
       {
         EXPECT_NEAR(b[i].dot(E * a[i]), 0.0, 1e-8);
       }
+      const Eigen::Vector3d sv = Eigen::JacobiSVD<Eigen::Matrix3d>(E).singularValues();
+      EXPECT_NEAR(sv[0], sv[1], 1e-6 * sv[0]);
+      EXPECT_NEAR(sv[2], 0.0, 1e-6 * sv[0]);
     }
     if (best < 1e-6)
     {

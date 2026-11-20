@@ -433,6 +433,8 @@ FocalEstimate mola::vision::estimateFocalByTwoViewConsensus(
     if (fine_supported > 0 && at_fine <= at_coarse)
     {
       out.focal = fine.focal;
+      // Same definition as the sampled costs, so flatness stays comparable.
+      out.cost = coarse_cost(fine.focal);
     }
   }
 

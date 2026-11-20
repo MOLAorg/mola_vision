@@ -140,8 +140,8 @@ PnPResult mola::vision::solvePnP(
     }
     if (!accepted || result.converged)
     {
-      // No decrease possible: at a minimum to numerical precision.
-      result.converged = true;
+      // Without an accepted step the damping trials are exhausted: stop, but
+      // only the checks above may claim convergence.
       break;
     }
   }

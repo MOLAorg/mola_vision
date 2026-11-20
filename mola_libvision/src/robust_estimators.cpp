@@ -35,20 +35,29 @@ void drawSample(std::mt19937& rng, size_t n, int k, std::vector<size_t>& out)
   }
 }
 
-int requiredIterations(double inlier_ratio, int sample_size, double confidence)
+int requiredIterations(int num_inliers, size_t n, int sample_size, double confidence)
 {
-  const double w = std::clamp(inlier_ratio, 1e-6, 1.0 - 1e-12);
-  const double p = std::pow(w, sample_size);
+  // Probability that a sample of distinct correspondences is all inliers.
+  double p = 1.0;
+  for (int j = 0; j < sample_size; ++j)
+  {
+    p *= std::max(0.0, static_cast<double>(num_inliers - j)) /
+         static_cast<double>(n - static_cast<size_t>(j));
+  }
   if (p >= 1.0 - 1e-12)
   {
     return 1;
   }
-  const double n = std::log(1.0 - confidence) / std::log(1.0 - p);
-  if (!std::isfinite(n) || n > 1e7)
+  if (p <= 0.0)
   {
     return std::numeric_limits<int>::max();
   }
-  return static_cast<int>(std::ceil(n));
+  const double iters = std::log(1.0 - confidence) / std::log(1.0 - p);
+  if (!std::isfinite(iters) || iters > 1e7)
+  {
+    return std::numeric_limits<int>::max();
+  }
+  return static_cast<int>(std::ceil(iters));
 }
 
 /** Generic MSAC loop. */
@@ -103,10 +112,8 @@ RansacReport runMsac(
         best_in    = n_in;
         best_model = m;
         have_model = true;
-        needed     = std::max(
-                opt.min_iterations,
-                requiredIterations(
-                    static_cast<double>(n_in) / static_cast<double>(N), sample_size, opt.confidence));
+        needed =
+            std::max(opt.min_iterations, requiredIterations(n_in, N, sample_size, opt.confidence));
       }
     }
   }

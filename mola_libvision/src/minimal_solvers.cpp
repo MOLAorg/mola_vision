@@ -260,10 +260,14 @@ bool twoViewDepths(
     const Eigen::Matrix3d& R, const Eigen::Vector3d& t, const Eigen::Vector3d& b1,
     const Eigen::Vector3d& b2, double& l1, double& l2)
 {
-  // Solve l1 R b1 - l2 b2 = -t in the least-squares sense.
+  // Solve l1 R u1 - l2 u2 = -t in the least-squares sense, on unit rays so
+  // the conditioning test does not depend on the bearing norms (the depths
+  // are then along unit rays, which keeps their signs).
+  const Eigen::Vector3d       u1 = b1.normalized();
+  const Eigen::Vector3d       u2 = b2.normalized();
   Eigen::Matrix<double, 3, 2> A;
-  A.col(0)                  = R * b1;
-  A.col(1)                  = -b2;
+  A.col(0)                  = R * u1;
+  A.col(1)                  = -u2;
   const Eigen::Matrix2d AtA = A.transpose() * A;
   const double          det = AtA.determinant();
   if (std::abs(det) < 1e-14)
@@ -789,6 +793,10 @@ std::optional<RelativePose> mola::vision::relativePoseFromEssential(
     const Eigen::Matrix3d& E, const std::vector<Eigen::Vector3d>& b1,
     const std::vector<Eigen::Vector3d>& b2, const std::vector<bool>* mask)
 {
+  if (b1.size() != b2.size() || (mask != nullptr && mask->size() != b1.size()))
+  {
+    return std::nullopt;
+  }
   Eigen::JacobiSVD<Eigen::Matrix3d> svd(E, Eigen::ComputeFullU | Eigen::ComputeFullV);
   Eigen::Matrix3d                   U = svd.matrixU();
   Eigen::Matrix3d                   V = svd.matrixV();
