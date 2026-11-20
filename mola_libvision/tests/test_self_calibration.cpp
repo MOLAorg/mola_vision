@@ -404,3 +404,21 @@ TEST(SelfCalibration, FocalSweepRejectsMismatchedPairs)
   m.p1 = {Eigen::Vector2d(1, 2)};
   EXPECT_FALSE(estimateFocalByTwoViewConsensus({m}, fo).valid);
 }
+
+TEST(SelfCalibration, IntrinsicsPriorHoldsPoorlyConstrainedFocal)
+{
+  // Two views, little rotation: the focal is weak; a tight prior keeps it.
+  const auto              gt   = CameraModel::Pinhole(640, 480, 500, 500, 319.5, 239.5);
+  const auto              s    = makeSequence(gt, 3, 300, 0.3, 41, 1.0, 0.5);
+  const auto              init = CameraModel::Pinhole(640, 480, 550, 550, 319.5, 239.5);
+  auto                    p    = perturbedProblem(s, init, 7, 0.0, 0.0, 0.05);
+  BundleAdjustmentOptions o;
+  IntrinsicsMask          m;
+  m.fixed_aspect_ratio       = true;
+  m.estimate_principal_point = false;
+  o.intrinsics               = {m};
+  o.intrinsics_prior_sigmas  = {Eigen::VectorXd::Constant(1, 1e-3)};
+  const auto r               = bundleAdjust(p, o);
+  ASSERT_TRUE(r.success) << r.message;
+  EXPECT_NEAR(p.cameras[0].fx(), 550.0, 0.01);
+}
