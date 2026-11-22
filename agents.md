@@ -99,7 +99,8 @@ MSAC on bearings (`minimal_solvers.h`, `robust_estimators.h`), focal
 initialization (`focal_initialization.h`), PnP on distorted pixels
 (`pnp_solver.h`), and `bundleAdjust()` (`bundle_adjustment.h`, GTSAM, private
 dependency) with intrinsics as variables, points at infinity, rotation-only
-mode and marginal covariances. Conventions: relative pose x2 = R x1 + t,
+mode, priors on the rotation angle between poses (gyroscope or odometry; the
+angle needs no sensor-to-camera rotation) and marginal covariances. Conventions: relative pose x2 = R x1 + t,
 E = [t]x R; poses T_cw; a variable point needs two observations or it is left
 out of the BA. GTSAM 4.2 and 4.3 differ in the factor Jacobian signature
 (boost::optional vs pointer): keep the `MOLA_GTSAM_JACOBIANS` macro. The

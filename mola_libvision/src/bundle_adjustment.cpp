@@ -20,12 +20,14 @@
 #include <mola_libvision/bundle_adjustment.h>
 #include <mrpt/math/CMatrixFixed.h>
 
+#include <Eigen/Geometry>
 #include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <string>
 
 // GTSAM 4.3 replaced boost::optional Jacobian arguments by raw pointers.
 #if GTSAM_VERSION_NUMERIC >= 40300
@@ -281,9 +283,91 @@ class CenterPriorFactor : public gtsam::NoiseModelFactor
   Eigen::Vector3d c_;
 };
 
-gtsam::SharedNoiseModel makeNoise(double sigma, const BundleAdjustmentOptions& o)
+/** Prior on the angle of the rotation between two poses. Each side is a Pose3
+ *  variable, a Rot3 variable (rotation-only) or a constant; the keys hold the
+ *  variables, in that order. */
+class RotationAngleFactor : public gtsam::NoiseModelFactor
 {
-  auto base = gtsam::noiseModel::Isotropic::Sigma(2, sigma);
+ public:
+  struct Side
+  {
+    PoseVar     var = PoseVar::Constant;
+    gtsam::Rot3 R_const;  ///< rotation of T_wc, used when constant
+  };
+
+  RotationAngleFactor(
+      const gtsam::SharedNoiseModel& noise, const gtsam::KeyVector& keys, const Side& a,
+      const Side& b, double angle)
+      : gtsam::NoiseModelFactor(noise, keys), a_(a), b_(b), angle_(angle)
+  {
+  }
+
+  gtsam::Vector unwhitenedError(const gtsam::Values& x, MOLA_GTSAM_JACOBIANS) const override
+  {
+    size_t          k  = 0;
+    gtsam::Rot3     Ra = a_.R_const;
+    gtsam::Rot3     Rb = b_.R_const;
+    Eigen::MatrixXd Ja;
+    Eigen::MatrixXd Jb;
+    if (a_.var != PoseVar::Constant)
+    {
+      Ra = rotationOf(x, a_.var, keys()[k++], Ja);
+    }
+    if (b_.var != PoseVar::Constant)
+    {
+      Rb = rotationOf(x, b_.var, keys()[k++], Jb);
+    }
+    Eigen::Matrix3d      Hba;
+    Eigen::Matrix3d      Hbb;
+    const gtsam::Rot3    Rab = Ra.between(Rb, Hba, Hbb);
+    Eigen::Matrix3d      Hlog;
+    const gtsam::Vector3 w     = gtsam::Rot3::Logmap(Rab, Hlog);
+    const double         theta = w.norm();
+    if (H)
+    {
+      // d(angle)/d(rotation vector) is undefined at zero: no pull there.
+      Eigen::RowVector3d dtheta = Eigen::RowVector3d::Zero();
+      if (theta > 1e-12)
+      {
+        dtheta = w.transpose() / theta;
+      }
+      size_t slot = 0;
+      if (a_.var != PoseVar::Constant)
+      {
+        (*H)[slot++] = dtheta * Hlog * Hba * Ja;
+      }
+      if (b_.var != PoseVar::Constant)
+      {
+        (*H)[slot++] = dtheta * Hlog * Hbb * Jb;
+      }
+    }
+    return gtsam::Vector1(theta - angle_);
+  }
+
+ private:
+  /** Rotation of a pose variable, and its Jacobian wrt the variable. */
+  static gtsam::Rot3 rotationOf(
+      const gtsam::Values& x, PoseVar var, gtsam::Key key, Eigen::MatrixXd& J)
+  {
+    if (var == PoseVar::RotationOnly)
+    {
+      J = Eigen::Matrix3d::Identity();
+      return x.at<gtsam::Rot3>(key);
+    }
+    Eigen::Matrix<double, 3, 6> Hr;
+    const gtsam::Rot3           R = x.at<gtsam::Pose3>(key).rotation(Hr);
+    J                             = Hr;
+    return R;
+  }
+
+  Side   a_;
+  Side   b_;
+  double angle_;
+};
+
+gtsam::SharedNoiseModel makeNoise(double sigma, const BundleAdjustmentOptions& o, size_t dim = 2)
+{
+  auto base = gtsam::noiseModel::Isotropic::Sigma(dim, sigma);
   switch (o.loss)
   {
     case RobustLoss::Huber:
@@ -355,6 +439,28 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
   {
     out.message = "point_at_infinity must be empty or have one entry per point";
     return out;
+  }
+  for (size_t q = 0; q < problem.rotation_angle_priors.size(); ++q)
+  {
+    const auto& pr  = problem.rotation_angle_priors[q];
+    const auto  bad = [&](const std::string& why)
+    {
+      out.message = "rotation_angle_priors[" + std::to_string(q) + "]: " + why;
+      return out;
+    };
+    if (pr.pose_a < 0 || pr.pose_b < 0 || static_cast<size_t>(pr.pose_a) >= nPoses ||
+        static_cast<size_t>(pr.pose_b) >= nPoses || pr.pose_a == pr.pose_b)
+    {
+      return bad("needs two different, existing poses");
+    }
+    if (!(pr.angle >= 0.0 && pr.angle <= M_PI))
+    {
+      return bad("the angle must be in [0, pi]");
+    }
+    if (!(std::isfinite(pr.sigma) && pr.sigma > 0.0))
+    {
+      return bad("the sigma must be finite and positive");
+    }
   }
   auto cameraOf = [&](size_t pose) -> size_t
   { return problem.pose_camera.empty() ? 0 : static_cast<size_t>(problem.pose_camera[pose]); };
@@ -802,6 +908,37 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
     }
   }
 
+  // Rotation angle priors between poses: on the variables they involve.
+  std::vector<bool> prior_used(problem.rotation_angle_priors.size(), false);
+  for (size_t q = 0; q < problem.rotation_angle_priors.size(); ++q)
+  {
+    const auto&               pr = problem.rotation_angle_priors[q];
+    const auto                ia = static_cast<size_t>(pr.pose_a);
+    const auto                ib = static_cast<size_t>(pr.pose_b);
+    RotationAngleFactor::Side sa;
+    RotationAngleFactor::Side sb;
+    sa.var     = pose_used[ia] ? pose_var[ia] : PoseVar::Constant;
+    sb.var     = pose_used[ib] ? pose_var[ib] : PoseVar::Constant;
+    sa.R_const = T_wc[ia].rotation();
+    sb.R_const = T_wc[ib].rotation();
+    gtsam::KeyVector keys;
+    if (sa.var != PoseVar::Constant)
+    {
+      keys.push_back(poseKey(ia));
+    }
+    if (sb.var != PoseVar::Constant)
+    {
+      keys.push_back(poseKey(ib));
+    }
+    if (keys.empty())
+    {
+      continue;
+    }
+    graph.emplace_shared<RotationAngleFactor>(
+        makeNoise(pr.sigma, options, 1), keys, sa, sb, pr.angle);
+    prior_used[q] = true;
+  }
+
   if (graph.empty() || values.empty())
   {
     out.message = "nothing to optimize";
@@ -1095,6 +1232,22 @@ BundleAdjustmentResult mola::vision::bundleAdjust(
     {
       out.residuals[o] = (px - ob.pixel).norm();
     }
+  }
+  out.rotation_angle_errors.assign(
+      problem.rotation_angle_priors.size(), std::numeric_limits<double>::quiet_NaN());
+  for (size_t q = 0; q < problem.rotation_angle_priors.size(); ++q)
+  {
+    if (!prior_used[q])
+    {
+      continue;
+    }
+    const auto&           pr = problem.rotation_angle_priors[q];
+    const Eigen::Matrix3d Ra =
+        problem.poses[static_cast<size_t>(pr.pose_a)].getRotationMatrix().asEigen();
+    const Eigen::Matrix3d Rb =
+        problem.poses[static_cast<size_t>(pr.pose_b)].getRotationMatrix().asEigen();
+    const Eigen::AngleAxisd aa(Eigen::Matrix3d(Ra * Rb.transpose()));
+    out.rotation_angle_errors[q] = std::abs(aa.angle()) - pr.angle;
   }
   if (out.success)
   {

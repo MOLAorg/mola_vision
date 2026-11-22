@@ -29,6 +29,19 @@ struct BAObservationPx
   double          sigma = 1.0;  ///< observation standard deviation, pixels
 };
 
+/** Prior on the angle of the rotation between two poses, e.g. from a gyroscope
+ *  or the odometry of a vehicle carrying the camera. The angle of a relative
+ *  rotation is the same in every frame, so the rotation between that sensor
+ *  and the camera is not needed. The angle's derivative is undefined at zero
+ *  rotation: use pairs that rotated well above the prior's sigma. */
+struct BARotationAnglePrior
+{
+  int    pose_a = -1;  ///< index into BundleAdjustmentProblem::poses
+  int    pose_b = -1;  ///< index into BundleAdjustmentProblem::poses
+  double angle  = 0.0;  ///< rotation angle from pose_a to pose_b, radians, in [0, pi]
+  double sigma  = 0.0;  ///< standard deviation, radians
+};
+
 /** A bundle adjustment problem. Several poses may share one camera model
  *  (intrinsics group), which is what makes self-calibration possible. */
 struct BundleAdjustmentProblem
@@ -46,6 +59,11 @@ struct BundleAdjustmentProblem
    *  points (and rotation-only sequences) usable for calibration. */
   std::vector<bool>            point_at_infinity;
   std::vector<BAObservationPx> observations;
+  /** Optional priors on the rotation angle between pairs of poses. They are
+   *  robustified with the same loss as the observations. With a focal length
+   *  that the images alone determine poorly (e.g. a camera that only turns
+   *  about one axis), they set it through the size of the rotations. */
+  std::vector<BARotationAnglePrior> rotation_angle_priors;
 };
 
 enum class RobustLoss : uint8_t
@@ -120,6 +138,10 @@ struct BundleAdjustmentResult
   /** Final reprojection error of each observation, in pixels; NaN when the
    *  point does not project (behind the camera, beyond the model's range). */
   std::vector<double> residuals;
+
+  /** Per rotation angle prior: final angle minus the prior's, radians; NaN
+   *  for priors left out (both poses constant). */
+  std::vector<double> rotation_angle_errors;
 
   /** Per camera: covariance of the FULL intrinsic parameter vector (rows and
    *  columns of fixed parameters are zero), assuming the observation sigmas.
