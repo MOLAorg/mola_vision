@@ -46,7 +46,7 @@ struct SyntheticSequence
 
 SyntheticSequence makeSequence(
     const CameraModel& cam, int n_poses, int n_points, double noise_px, unsigned seed,
-    double rotation_deg = 15.0, double translation = 1.0, double wide = 1.0)
+    double rotation_deg = 15.0, double translation = 1.0, double wide = 1.0, bool planar = false)
 {
   SyntheticSequence s;
   s.camera = cam;
@@ -61,12 +61,17 @@ SyntheticSequence makeSequence(
   const double rot = rotation_deg * M_PI / 180.0;
   for (int i = 0; i < n_poses; ++i)
   {
-    const double          u = static_cast<double>(i) / std::max(1, n_poses - 1);
-    const Eigen::Vector3d w(
-        rot * std::sin(2 * M_PI * u), rot * std::cos(3 * M_PI * u), 0.3 * rot * u);
-    const Eigen::Matrix3d R_wc = so3Exp(w);
-    const Eigen::Vector3d C(
+    const double    u = static_cast<double>(i) / std::max(1, n_poses - 1);
+    Eigen::Vector3d w(rot * std::sin(2 * M_PI * u), rot * std::cos(3 * M_PI * u), 0.3 * rot * u);
+    Eigen::Vector3d C(
         translation * (2 * u - 1), 0.3 * translation * std::sin(4 * u), 0.5 * translation * u);
+    if (planar)
+    {
+      // A vehicle on flat ground: turns about the vertical (y) axis only.
+      w     = Eigen::Vector3d(0.0, rot * std::sin(2 * M_PI * u), 0.0);
+      C.y() = 0.0;
+    }
+    const Eigen::Matrix3d R_wc = so3Exp(w);
     const Eigen::Matrix3d R_cw = R_wc.transpose();
     s.poses.push_back(makePose(R_cw, -R_cw * C));
   }
@@ -541,4 +546,141 @@ TEST(SelfCalibration, GaugeForSeparateFiniteComponents)
   EXPECT_NEAR(p.cameras[0].fx(), 500.0, 2.0);
   ASSERT_EQ(r.intrinsics_covariance.size(), 1u);
   EXPECT_TRUE(std::isfinite(r.intrinsics_covariance[0](0, 0)));
+}
+
+namespace
+{
+double relativeAngle(const mrpt::poses::CPose3D& a, const mrpt::poses::CPose3D& b)
+{
+  return std::abs(Eigen::AngleAxisd(Eigen::Matrix3d(rotOf(a) * rotOf(b).transpose())).angle());
+}
+}  // namespace
+
+TEST(SelfCalibration, RotationAnglePriorSetsTheAngle)
+{
+  // Fixed camera and directions: the images say the second view turned 10
+  // degrees; a much tighter prior of 12 degrees wins.
+  const auto              cam = CameraModel::Pinhole(640, 480, 500, 500, 319.5, 239.5);
+  BundleAdjustmentProblem p;
+  p.cameras = {cam};
+  const Eigen::Matrix3d R1 =
+      so3Exp(10.0 * M_PI / 180.0 * Eigen::Vector3d(0.2, 1.0, 0.1).normalized());
+  p.poses = {mrpt::poses::CPose3D(), makePose(R1, Eigen::Vector3d::Zero())};
+  std::mt19937                           rng(7);
+  std::uniform_real_distribution<double> u(-0.3, 0.3);
+  for (int k = 0; k < 40; ++k)
+  {
+    p.points.push_back(Eigen::Vector3d(u(rng), u(rng), 1.0).normalized());
+  }
+  p.point_at_infinity.assign(p.points.size(), true);
+  for (size_t i = 0; i < p.poses.size(); ++i)
+  {
+    for (size_t j = 0; j < p.points.size(); ++j)
+    {
+      Eigen::Vector2d px;
+      if (cam.project(rotOf(p.poses[i]) * p.points[j], px))
+      {
+        BAObservationPx o;
+        o.pose  = static_cast<int>(i);
+        o.point = static_cast<int>(j);
+        o.pixel = px;
+        p.observations.push_back(o);
+      }
+    }
+  }
+  p.rotation_angle_priors = {{0, 1, 12.0 * M_PI / 180.0, 1e-5}};
+  BundleAdjustmentOptions o;
+  o.loss          = RobustLoss::None;
+  o.fix_points    = true;
+  o.rotation_only = true;
+  o.fixed_poses   = {true, false};
+  const auto r    = bundleAdjust(p, o);
+  ASSERT_TRUE(r.success) << r.message;
+  EXPECT_NEAR(relativeAngle(p.poses[0], p.poses[1]) * 180.0 / M_PI, 12.0, 0.01);
+  ASSERT_EQ(r.rotation_angle_errors.size(), 1u);
+  EXPECT_NEAR(r.rotation_angle_errors[0], 0.0, 1e-4);
+}
+
+TEST(SelfCalibration, RotationAnglePriorsDetermineAWeakFocal)
+{
+  // A camera that only turns a little about one axis, as on a ground
+  // vehicle, with lens distortion: the images alone determine the focal
+  // length poorly. Angle priors from the true poses (e.g. a gyroscope) pin it
+  // down; angles 3 % too large pull it down by about as much.
+  const auto gt   = CameraModel::RadTan(640, 480, 500, 500, 319.5, 239.5, -0.25, 0.06, 0, 0, 0);
+  const auto s    = makeSequence(gt, 24, 400, 0.5, 61, 6.0, 1.0, 1.0, true);
+  const auto init = CameraModel::RadTan(640, 480, 530, 530, 319.5, 239.5, 0, 0, 0, 0, 0);
+
+  BundleAdjustmentOptions o;
+  IntrinsicsMask          m;
+  m.fixed_aspect_ratio       = true;
+  m.estimate_principal_point = false;
+  m.estimate_distortion      = IntrinsicsMask::FirstN(5, 2);
+  o.intrinsics               = {m};
+  o.compute_covariance       = true;
+  o.max_iterations           = 200;
+
+  auto solve = [&](double angle_scale, double& f, double& sigma_f)
+  {
+    auto p = perturbedProblem(s, init, 11, 0.002, 0.01, 0.05);
+    if (angle_scale > 0)
+    {
+      for (size_t i = 0; i < s.poses.size(); ++i)
+      {
+        for (size_t d = 1; d <= 3 && i + d < s.poses.size(); ++d)
+        {
+          const double a = relativeAngle(s.poses[i], s.poses[i + d]);
+          if (a > 0.5 * M_PI / 180.0)
+          {
+            p.rotation_angle_priors.push_back(
+                {static_cast<int>(i), static_cast<int>(i + d), angle_scale * a,
+                 0.01 * M_PI / 180.0});
+          }
+        }
+      }
+    }
+    const auto r = bundleAdjust(p, o);
+    ASSERT_TRUE(r.success) << r.message;
+    ASSERT_EQ(r.intrinsics_covariance.size(), 1u) << r.message;
+    f       = p.cameras[0].fx();
+    sigma_f = std::sqrt(r.intrinsics_covariance[0](0, 0));
+    EXPECT_EQ(r.rotation_angle_errors.size(), p.rotation_angle_priors.size());
+  };
+  double f_images = 0;
+  double s_images = 0;
+  solve(0.0, f_images, s_images);
+  double f_prior = 0;
+  double s_prior = 0;
+  solve(1.0, f_prior, s_prior);
+  double f_biased = 0;
+  double s_biased = 0;
+  solve(1.03, f_biased, s_biased);
+
+  EXPECT_LT(s_prior, 0.5 * s_images);
+  EXPECT_NEAR(f_prior, 500.0, 2.5);
+  EXPECT_LT(std::abs(f_prior - 500.0), 4.0 * s_prior + 0.1);
+  EXPECT_NEAR(f_biased, 500.0 / 1.03, 6.0);
+}
+
+TEST(SelfCalibration, RotationAnglePriorsAreValidated)
+{
+  const auto              cam = CameraModel::Pinhole(640, 480, 500, 500, 319.5, 239.5);
+  const auto              s   = makeSequence(cam, 4, 100, 0.0, 71, 10.0, 1.0);
+  BundleAdjustmentProblem p;
+  p.cameras      = {cam};
+  p.poses        = s.poses;
+  p.points       = s.points;
+  p.observations = s.obs;
+  BundleAdjustmentOptions o;
+  for (const BARotationAnglePrior& bad :
+       {BARotationAnglePrior{0, 9, 0.1, 0.01}, BARotationAnglePrior{1, 1, 0.1, 0.01},
+        BARotationAnglePrior{0, 1, -0.1, 0.01}, BARotationAnglePrior{0, 1, 0.1, 0.0}})
+  {
+    auto q                  = p;
+    q.rotation_angle_priors = {bad};
+    EXPECT_FALSE(bundleAdjust(q, o).success);
+  }
+  auto ok                  = p;
+  ok.rotation_angle_priors = {{0, 1, relativeAngle(s.poses[0], s.poses[1]), 0.01}};
+  EXPECT_TRUE(bundleAdjust(ok, o).success);
 }
