@@ -244,8 +244,6 @@ std::vector<mrpt::math::TPoint2Df> GridFeatureDistributor::detect(
   std::vector<mrpt::math::TPoint2Df> result;
   result.reserve(params_.max_corners);
 
-  const float min_dist2 = params_.min_distance * params_.min_distance;
-
   for (int gr = 0; gr < params_.grid_rows; ++gr)
   {
     for (int gc = 0; gc < params_.grid_cols; ++gc)
@@ -272,7 +270,7 @@ std::vector<mrpt::math::TPoint2Df> GridFeatureDistributor::detect(
       mrpt::img::CImage patch;
       img.extract_patch(
           patch, {static_cast<int32_t>(x0), static_cast<int32_t>(y0)},
-          {static_cast<uint32_t>(x1 - x0), static_cast<uint32_t>(y1 - y0)});
+          {static_cast<int32_t>(x1 - x0), static_cast<int32_t>(y1 - y0)});
 
       auto cell_corners = goodFeaturesToTrack(patch, cell_params);
 
