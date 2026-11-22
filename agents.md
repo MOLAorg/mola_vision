@@ -149,3 +149,9 @@ a `COLCON_IGNORE` marker; build a single package with `--base-paths .`.
   --module mola::VisualSlam --module-param-file <file>` runs LiDAR and visual
   odometry into one state estimator, in a batch tool that drops no scans. The
   `mola-cli-launchs/*.yaml` files carry the same keys inline instead.
+- **ABI and versions**: shared libraries get the SOVERSION `MAJOR.MINOR` of `package.xml`, so a
+  patch release must keep the ABI. Changing the layout of a public type (data members added,
+  removed or reordered, virtual functions) or an exported signature needs a minor bump
+  (`catkin_prepare_release --bump minor`): otherwise packages built against the previous patch
+  release load the new library and silently corrupt memory (e.g. a struct grown by the library
+  overruns the caller's stack copy).
