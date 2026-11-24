@@ -149,8 +149,8 @@ bool mola::vision::decomposeEssentialMatrix(
       {{R1, t1}, {R1, t2}, {R2, t1}, {R2, t2}}};
 
   int             best_count = -1;
-  Eigen::Matrix3f best_R;
-  Eigen::Vector3f best_t;
+  Eigen::Matrix3f best_R     = Eigen::Matrix3f::Identity();
+  Eigen::Vector3f best_t     = Eigen::Vector3f::Zero();
 
   for (const auto& [R, t] : candidates)
   {
