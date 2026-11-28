@@ -13,9 +13,16 @@
 #   RGBD_INTENSITY_TOPIC=/camera/camera/color/image_raw \
 #   mola-cli rgbd_slam_ros2.yaml
 #
-# The vehicle pose is published to /tf (map -> base_link) and as
-# nav_msgs/Odometry. Set RGBD_TRAJECTORY_FILE=traj.tum to save the trajectory on
-# exit, and MOLA_WITH_GUI=false to run without the GUI.
+# Frames are dropped until /tf connects the image frames to RGBD_BASE_LINK
+# (default: base_link). For a camera alone, use its root frame instead, e.g.
+# RGBD_BASE_LINK=camera_link (RealSense) or camera_base (Azure Kinect). If the
+# depth camera sits at the origin of that frame (as with camera_link), its pose
+# looks unknown: poses are then published for a "camera" frame, unless
+# RGBD_CAMERA_POSE_ON_ROBOT gives the optical frame pose, e.g. "0 0 0 -90 0 -90".
+#
+# The vehicle pose is published to /tf (MOLA_TF_MAP -> RGBD_BASE_LINK, default:
+# map -> base_link) and as nav_msgs/Odometry. Set RGBD_TRAJECTORY_FILE=traj.tum to
+# save the trajectory on exit, and MOLA_WITH_GUI=false to run without the GUI.
 # -----------------------------------------------------------------------------
 
 modules:
@@ -38,8 +45,9 @@ modules:
       base_link_frame: ${RGBD_BASE_LINK|base_link}
       base_footprint_frame: ""
       reference_frame: ${MOLA_TF_MAP|map}
-      # Without odometry, publish map -> base_link directly:
-      publish_localization_following_rep105: false
+      # false: publish map -> base_link directly. true: map -> odom, if another
+      # node publishes odom -> base_link (e.g. wheel odometry):
+      publish_localization_following_rep105: ${MOLA_LOCALIZ_USE_REP105|false}
       publish_odometry_msgs_from_slam: true
       publish_tf_from_slam: ${MOLA_LOCALIZATION_PUBLISH_TF|true}
       publish_in_sim_time: ${MOLA_ROS2_PUBLISH_IN_SIM_TIME|true}
@@ -85,6 +93,9 @@ modules:
       estimated_trajectory_file: ${RGBD_TRAJECTORY_FILE|''}
       # Camera optical frame on the vehicle; empty: from the observations (/tf):
       camera_pose_on_robot: ${RGBD_CAMERA_POSE_ON_ROBOT|''}
+      # Frames of the published poses:
+      reference_frame: ${MOLA_TF_MAP|map}
+      base_link_frame: ${RGBD_BASE_LINK|base_link}
       publish_viz_2d: ${MOLA_WITH_GUI|true}
       viz2d_title: RGB-D SLAM tracking
       viz2d_win_pos: 10 60 800 600 # [x y width height]

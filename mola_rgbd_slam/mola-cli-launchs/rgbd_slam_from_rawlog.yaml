@@ -12,6 +12,8 @@
 #   RGBD_RAWLOG=/path/to/sequence.rawlog \
 #   RGBD_SENSOR_LABEL=CAMERA1 \
 #   mola-cli rgbd_slam_from_rawlog.yaml
+#
+# Set MOLA_WITH_GUI=false to run without the GUI.
 # -----------------------------------------------------------------------------
 
 modules:

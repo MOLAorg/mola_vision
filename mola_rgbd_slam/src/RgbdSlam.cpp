@@ -126,6 +126,14 @@ void RgbdSlam::initialize_frontend(const Yaml& c)
     {
       camera_pose_on_robot_str_ = cfg["camera_pose_on_robot"].as<std::string>();
     }
+    if (cfg.has("reference_frame"))
+    {
+      reference_frame_ = cfg["reference_frame"].as<std::string>();
+    }
+    if (cfg.has("base_link_frame"))
+    {
+      base_link_frame_ = cfg["base_link_frame"].as<std::string>();
+    }
   }
 
   mola::vision::ConstantVelocityModel::Parameters mp;
@@ -681,9 +689,9 @@ void RgbdSlam::publishLocalization(const mrpt::Clock::time_point& timestamp)
   LocalizationUpdate lu;
   lu.timestamp       = timestamp;
   lu.method          = "rgbd_slam";
-  lu.reference_frame = "map";
-  // Only claim "base_link" when the camera-on-robot extrinsic is known:
-  lu.child_frame = camera_pose_on_robot_ ? "base_link" : "camera";
+  lu.reference_frame = reference_frame_;
+  // Only claim the vehicle frame when the camera-on-robot extrinsic is known:
+  lu.child_frame = camera_pose_on_robot_ ? base_link_frame_ : "camera";
   lu.pose        = currentRobotPose().asTPose();
   advertiseUpdatedLocalization(lu);
 }
@@ -874,7 +882,7 @@ void RgbdSlam::publishMap(const mrpt::Clock::time_point& timestamp)
   MapUpdate mu;
   mu.timestamp       = timestamp;
   mu.method          = "rgbd_slam";
-  mu.reference_frame = "map";
+  mu.reference_frame = reference_frame_;
   mu.map_name        = "sparse_landmarks";
   mu.map             = cloud;
   advertiseUpdatedMap(mu);

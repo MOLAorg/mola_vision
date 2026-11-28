@@ -24,10 +24,12 @@ Packages:
   file on quit. `rgbd_slam_from_rosbag2.yaml` reads ROS 2 bags through
   `mola::Rosbag2Dataset` RGB-D sensors, and `rgbd_slam_ros2.yaml` live topics
   through `mola::BridgeROS2` (`msg_type: RGBD`); raw or compressed
-  (`compressedDepth`, `compressed`) images in both. The `mola-rgbd-gui-rosbag2 BAG`
-  and `mola-rgbd-gui-rawlog RAWLOG` wrappers (scripts/) find the topics (raw
-  first, then compressed) and launch it; `MOLA_WITH_GUI=false` runs headless. An identity `sensorPose` means an unknown extrinsic (child frame
-  "camera"), as in VisualSlam.
+  (`compressedDepth`, `compressed`) images in both. Wrappers (scripts/):
+  `mola-rgbd-gui-rosbag2 BAG` finds the topics (for each name, raw first, then
+  compressed), `mola-rgbd-gui-rawlog RAWLOG [LABEL]` (default label `CAMERA1`);
+  `MOLA_WITH_GUI=false` runs headless. Published frames: `reference_frame`
+  ("map") -> `base_link_frame` ("base_link"). An identity `sensorPose` means an
+  unknown extrinsic (child frame "camera"), as in VisualSlam.
 - `mola_visual_slam` — monocular/stereo visual SLAM front-end
   (`mola::VisualSlam`). `mode=mono`: essential-matrix bootstrap, PnP tracking,
   cross-keyframe triangulation, windowed BA (up-to-scale). `mode=stereo`: pairs

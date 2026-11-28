@@ -27,7 +27,9 @@
   <!-- Runtime modules used by the demo launch files -->
   <exec_depend>mola_viz</exec_depend>
   <exec_depend>mola_launcher</exec_depend>
-  <exec_depend>mola_input_rosbag2</exec_depend>
+  <!-- RGB-D cameras (compressed topics, BridgeROS2 msg_type RGBD) need MOLA newer than 3.6.0 -->
+  <exec_depend version_gt="3.6.0">mola_input_rosbag2</exec_depend>
+  <exec_depend version_gt="3.6.0">mola_bridge_ros2</exec_depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>libgtest-dev</test_depend>
