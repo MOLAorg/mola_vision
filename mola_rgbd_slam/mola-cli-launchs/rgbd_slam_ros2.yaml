@@ -1,0 +1,102 @@
+# Copyright (C) 2026, Jose Luis Blanco-Claraco
+# SPDX-License-Identifier: GPL-3.0-or-later
+# -----------------------------------------------------------------------------
+#                        MOLA system definition
+# RGB-D visual SLAM (mola::RgbdSlam) from live ROS 2 topics of an RGB-D camera
+# (mola::BridgeROS2, msg_type RGBD): a depth image, an intensity (color or
+# infrared) image and their camera_info. Raw (sensor_msgs/Image) or compressed
+# topics (ending in /compressedDepth or /compressed) are accepted. The camera
+# extrinsics come from /tf.
+#
+# Usage:
+#   RGBD_DEPTH_TOPIC=/camera/camera/depth/image_rect_raw \
+#   RGBD_INTENSITY_TOPIC=/camera/camera/color/image_raw \
+#   mola-cli rgbd_slam_ros2.yaml
+#
+# Frames are dropped until /tf connects the image frames to RGBD_BASE_LINK
+# (default: base_link). For a camera alone, use its root frame instead, e.g.
+# RGBD_BASE_LINK=camera_link (RealSense) or camera_base (Azure Kinect). If the
+# depth camera sits at the origin of that frame (as with camera_link), its pose
+# looks unknown: poses are then published for a "camera" frame, unless
+# RGBD_CAMERA_POSE_ON_ROBOT gives the optical frame pose, e.g. "0 0 0 -90 0 -90".
+#
+# The vehicle pose is published to /tf (MOLA_TF_MAP -> RGBD_BASE_LINK, default:
+# map -> base_link) and as nav_msgs/Odometry. Set RGBD_TRAJECTORY_FILE=traj.tum to
+# save the trajectory on exit, and MOLA_WITH_GUI=false to run without the GUI.
+# -----------------------------------------------------------------------------
+
+modules:
+  # =====================
+  # MolaViz (ImGui GUI)
+  # =====================
+  - name: viz
+    type: ${MOLA_GUI_MODULE|mola::MolaVizImGui}
+    enabled: ${MOLA_WITH_GUI|true}
+    params: ~
+
+  # =====================
+  # ROS 2 <-> MOLA
+  # =====================
+  - name: ros2_bridge
+    type: mola::BridgeROS2
+    verbosity_level: "${MOLA_VERBOSITY_BRIDGE_ROS2|INFO}"
+    execution_rate: 20 # Hz
+    params:
+      base_link_frame: ${RGBD_BASE_LINK|base_link}
+      base_footprint_frame: ""
+      reference_frame: ${MOLA_TF_MAP|map}
+      # false: publish map -> base_link directly. true: map -> odom, if another
+      # node publishes odom -> base_link (e.g. wheel odometry):
+      publish_localization_following_rep105: ${MOLA_LOCALIZ_USE_REP105|false}
+      publish_odometry_msgs_from_slam: true
+      publish_tf_from_slam: ${MOLA_LOCALIZATION_PUBLISH_TF|true}
+      publish_in_sim_time: ${MOLA_ROS2_PUBLISH_IN_SIM_TIME|true}
+      subscribe:
+        - topic: ${RGBD_DEPTH_TOPIC|/camera/camera/depth/image_rect_raw}
+          msg_type: RGBD
+          output_sensor_label: rgbd
+          intensity_topic: ${RGBD_INTENSITY_TOPIC|/camera/camera/color/image_raw}
+          # Maximum stamp difference to pair depth and intensity frames [s]:
+          max_time_offset: ${RGBD_MAX_TIME_OFFSET|0.010}
+          qos:
+            reliability: ${RGBD_QOS_RELIABILITY|best_effort}
+            depth: ${RGBD_QOS_DEPTH|5} # few: images are large
+
+  # =====================
+  # RGB-D SLAM front-end
+  # =====================
+  - name: rgbd_slam
+    type: mola::RgbdSlam
+    raw_data_source: ros2_bridge
+    execution_rate: 30 # Hz
+    verbosity_level: "${MOLA_VERBOSITY|INFO}"
+    params:
+      sensor_label: rgbd
+      max_features: ${RGBD_MAX_FEATURES|400}
+      min_distance: 12.0
+      redetect_below: 150
+      lk_win_size: 21
+      lk_max_levels: 3
+      min_pnp_points: 12
+      # Depth range used for landmarks. Raising min_depth is also a way to
+      # ignore parts of the robot itself that are in view:
+      min_depth: ${RGBD_MIN_DEPTH|0.2}
+      max_depth: ${RGBD_MAX_DEPTH|8.0}
+      ba_window_size: 8
+      kf_max_frames_gap: 20
+      kf_min_frames_gap: 2
+      kf_min_tracked: 80
+      kf_min_tracked_ratio: 0.6
+      kf_min_parallax_px: 18.0
+      velocity_window: ${RGBD_VELOCITY_WINDOW|0.3}
+      max_extrapolation: ${RGBD_MAX_EXTRAPOLATION|1.5}
+      estimated_trajectory_file: ${RGBD_TRAJECTORY_FILE|''}
+      # Camera optical frame on the vehicle; empty: from the observations (/tf):
+      camera_pose_on_robot: ${RGBD_CAMERA_POSE_ON_ROBOT|''}
+      # Frames of the published poses:
+      reference_frame: ${MOLA_TF_MAP|map}
+      base_link_frame: ${RGBD_BASE_LINK|base_link}
+      publish_viz_2d: ${MOLA_WITH_GUI|true}
+      viz2d_title: RGB-D SLAM tracking
+      viz2d_win_pos: 10 60 800 600 # [x y width height]
+      publish_viz_3d: ${MOLA_WITH_GUI|true}

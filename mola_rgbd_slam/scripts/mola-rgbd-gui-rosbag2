@@ -15,18 +15,22 @@ usage() {
   echo ""
   echo "Common environment variables:"
   echo "  RGBD_DEPTH_TOPIC       Depth image topic (default: found in the bag, preferring"
-  echo "                         .../aligned_depth_to_color/image_raw, then .../depth/image_rect_raw)"
-  echo "  RGBD_INTENSITY_TOPIC   Color/IR image topic (default: found in the bag, .../color/image_raw)"
-  echo "  RGBD_BASE_LINK         Robot base /tf frame id (default: 'base_link')"
+  echo "                         registered depth (.../aligned_depth_to_color/image_raw,...), then"
+  echo "                         .../depth/image_rect_raw; for each, raw, then compressedDepth)"
+  echo "  RGBD_INTENSITY_TOPIC   Color/IR image topic (default: found in the bag, .../color/image_raw,"
+  echo "                         .../rgb/image_raw,...; for each, raw, then compressed)"
+  echo "  RGBD_BASE_LINK         Robot base /tf frame id (default: 'base_link'). For a camera"
+  echo "                         alone, its root frame (e.g. 'camera_link', 'camera_base')"
   echo "  RGBD_MIN_DEPTH         Minimum landmark depth [m] (default: 0.2). Raise it to ignore"
   echo "                         parts of the robot in view."
   echo "  RGBD_MAX_DEPTH         Maximum landmark depth [m] (default: 8.0)"
   echo "  RGBD_MAX_FEATURES      Tracked features (default: 400)"
-  echo "  RGBD_MAX_TIME_OFFSET   Max. depth/intensity stamp difference [s] (default: 0.005)"
+  echo "  RGBD_MAX_TIME_OFFSET   Max. depth/intensity stamp difference [s] (default: 0.010)"
   echo "  RGBD_CAMERA_POSE_ON_ROBOT  'x y z yaw_deg pitch_deg roll_deg' of the camera optical"
   echo "                         frame on the robot (default: from /tf)"
   echo "  RGBD_TRAJECTORY_FILE   Save the vehicle trajectory (TUM format) on exit"
   echo "  MOLA_TIME_WARP         Playback speed (default: 1.0)"
+  echo "  MOLA_WITH_GUI          'false' to run without the GUI (default: true)"
 }
 
 if [ "$#" -lt 1 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
@@ -52,27 +56,44 @@ if [ ! -f "$LAUNCH" ]; then
   exit 1
 fi
 
-# Find the RGB-D topics in the bag, unless given:
+# Find the RGB-D topics in the bag, unless given. For each topic name, raw
+# (sensor_msgs/Image) is preferred over compressed (image_transport "compressedDepth" and
+# "compressed"):
 if [ -z "${RGBD_DEPTH_TOPIC:-}" ] || [ -z "${RGBD_INTENSITY_TOPIC+set}" ]; then
-  IMAGE_TOPICS=$(ros2 bag info "$BAG" 2>/dev/null |
-    sed -n 's/.*Topic: \([^ |]*\) *| *Type: sensor_msgs\/msg\/Image .*/\1/p')
+  BAG_INFO=$(ros2 bag info "$BAG" 2>&1) || {
+    echo "Error: cannot read the bag '$BAG':" >&2
+    echo "$BAG_INFO" >&2
+    exit 1
+  }
+  topicsOfType() {
+    sed -n "s/.*Topic: \([^ |]*\) *| *Type: sensor_msgs\/msg\/$1 .*/\1/p" <<<"$BAG_INFO"
+  }
+  IMAGE_TOPICS=$(topicsOfType Image)
+  COMPRESSED_TOPICS=$(topicsOfType CompressedImage)
+  # pick <transport suffix> <topic suffixes...>: the first topic found, in the order of the
+  # suffixes; for each one, raw first.
   pick() {
+    local transport=$1
     local suffix
+    shift
     for suffix in "$@"; do
       grep -m1 -E -- "${suffix}\$" <<<"$IMAGE_TOPICS" && return 0
+      grep -m1 -E -- "${suffix}/${transport}\$" <<<"$COMPRESSED_TOPICS" && return 0
     done
     return 1
   }
   if [ -z "${RGBD_DEPTH_TOPIC:-}" ]; then
-    RGBD_DEPTH_TOPIC=$(pick '/aligned_depth_to_color/image_raw' '/depth/image_rect_raw' \
-      '/depth/image_raw') || {
+    RGBD_DEPTH_TOPIC=$(pick compressedDepth '/aligned_depth_to_color/image_raw' \
+      '/depth_to_rgb/image_raw' '/depth_registered' '/depth_registered/image_raw' \
+      '/depth_registered/image_rect' '/depth/image_rect_raw' '/depth/image_raw') || {
       echo "Error: no depth image topic found in '$BAG'. Set RGBD_DEPTH_TOPIC." >&2
       exit 1
     }
     echo "Depth topic:     $RGBD_DEPTH_TOPIC (set RGBD_DEPTH_TOPIC to change it)"
   fi
   if [ -z "${RGBD_INTENSITY_TOPIC+set}" ]; then
-    RGBD_INTENSITY_TOPIC=$(pick '/color/image_raw' '/color/image_rect_raw' '/infra1/image_rect_raw') || {
+    RGBD_INTENSITY_TOPIC=$(pick compressed '/color/image_raw' '/color/image_rect_raw' \
+      '/rgb/image_raw' '/rgb/image_rect_color' '/infra1/image_rect_raw') || {
       echo "Error: no color image topic found in '$BAG'. Set RGBD_INTENSITY_TOPIC." >&2
       exit 1
     }

@@ -48,7 +48,7 @@ namespace mola
  *   5. KeyframeSelector decides keyframes; on a keyframe, refine the recent
  *      keyframe poses and observed landmarks with sliding-window BA.
  *   6. Publish the vehicle pose (LocalizationSourceBase) and sparse map
- *      (MapSourceBase), both in the "map" frame, defined as the vehicle pose
+ *      (MapSourceBase), both in the `reference_frame` ("map"), defined as the vehicle pose
  *      at the first frame. The camera-on-vehicle extrinsic comes from the
  *      `camera_pose_on_robot` parameter, or else from the observations
  *      (`sensorPose` composed with `relativePoseIntensityWRTDepth`).
@@ -164,6 +164,10 @@ class RgbdSlam : public mola::FrontEndBase,
   /** "x y z yaw_deg pitch_deg roll_deg" of the camera optical frame on the
    *  vehicle; overrides the extrinsics carried by the observations. */
   std::string camera_pose_on_robot_str_;
+  std::string reference_frame_ = "map";  ///< frame of the published poses and map
+  /** Child frame of the published poses ("camera" while the camera-on-vehicle extrinsic is
+   *  unknown). */
+  std::string base_link_frame_ = "base_link";
   /** If not empty, the vehicle trajectory is saved here (TUM format) on quit. */
   std::string estimated_trajectory_file_;
 
