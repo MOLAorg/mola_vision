@@ -22,9 +22,11 @@ Packages:
   first frame) using `sensorPose + relativePoseIntensityWRTDepth`, or the
   `camera_pose_on_robot` parameter; `estimated_trajectory_file` saves a TUM
   file on quit. `rgbd_slam_from_rosbag2.yaml` reads ROS 2 bags through
-  `mola::Rosbag2Dataset` RGB-D sensors; the `mola-rgbd-gui-rosbag2 BAG` and
-  `mola-rgbd-gui-rawlog RAWLOG` wrappers (scripts/) find the topics and launch
-  it. An identity `sensorPose` means an unknown extrinsic (child frame
+  `mola::Rosbag2Dataset` RGB-D sensors, and `rgbd_slam_ros2.yaml` live topics
+  through `mola::BridgeROS2` (`msg_type: RGBD`); raw or compressed
+  (`compressedDepth`, `compressed`) images in both. The `mola-rgbd-gui-rosbag2 BAG`
+  and `mola-rgbd-gui-rawlog RAWLOG` wrappers (scripts/) find the topics (raw
+  first, then compressed) and launch it; `MOLA_WITH_GUI=false` runs headless. An identity `sensorPose` means an unknown extrinsic (child frame
   "camera"), as in VisualSlam.
 - `mola_visual_slam` — monocular/stereo visual SLAM front-end
   (`mola::VisualSlam`). `mode=mono`: essential-matrix bootstrap, PnP tracking,

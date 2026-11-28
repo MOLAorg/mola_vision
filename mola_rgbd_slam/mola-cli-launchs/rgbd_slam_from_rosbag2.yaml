@@ -17,7 +17,8 @@
 #   RGBD_INTENSITY_TOPIC=/camera/camera/color/image_raw \
 #   mola-cli rgbd_slam_from_rosbag2.yaml
 #
-# Set RGBD_TRAJECTORY_FILE=traj.tum to save the vehicle trajectory on exit.
+# Set RGBD_TRAJECTORY_FILE=traj.tum to save the vehicle trajectory on exit, and
+# MOLA_WITH_GUI=false to run without the GUI.
 # -----------------------------------------------------------------------------
 
 modules:
@@ -26,6 +27,7 @@ modules:
   # =====================
   - name: viz
     type: ${MOLA_GUI_MODULE|mola::MolaVizImGui}
+    enabled: ${MOLA_WITH_GUI|true}
     params: ~
 
   # =====================
@@ -46,7 +48,7 @@ modules:
           # Optional; empty means depth only (not usable by RgbdSlam):
           intensity_topic: ${RGBD_INTENSITY_TOPIC|/camera/camera/color/image_raw}
           # Maximum stamp difference to pair depth and intensity frames [s]:
-          max_time_offset: ${RGBD_MAX_TIME_OFFSET|0.005}
+          max_time_offset: ${RGBD_MAX_TIME_OFFSET|0.010}
 
   # =====================
   # RGB-D SLAM front-end
@@ -82,7 +84,7 @@ modules:
       estimated_trajectory_file: ${RGBD_TRAJECTORY_FILE|''}
       # Camera optical frame on the vehicle; empty: from the observations (/tf):
       camera_pose_on_robot: ${RGBD_CAMERA_POSE_ON_ROBOT|''}
-      publish_viz_2d: true
+      publish_viz_2d: ${MOLA_WITH_GUI|true}
       viz2d_title: RGB-D SLAM tracking
       viz2d_win_pos: 10 60 800 600 # [x y width height]
-      publish_viz_3d: true
+      publish_viz_3d: ${MOLA_WITH_GUI|true}
